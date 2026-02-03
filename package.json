@@ -1,0 +1,28 @@
+{
+  "name": "wopr-plugin-memory-semantic",
+  "version": "1.0.0",
+  "description": "Semantic memory search with embeddings, auto-recall, and auto-capture for WOPR",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "wopr": "*"
+  },
+  "peerDependenciesMeta": {
+    "wopr": {
+      "optional": true
+    }
+  },
+  "keywords": ["wopr", "plugin", "memory", "semantic", "embeddings", "vector-search"],
+  "license": "MIT"
+}
