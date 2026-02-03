@@ -49,6 +49,18 @@ interface WoprPluginApi {
     getManager?(): any;
   };
 
+  // A2A tool registration
+  registerA2AServer?(config: {
+    name: string;
+    description: string;
+    tools: Array<{
+      name: string;
+      description: string;
+      inputSchema: Record<string, any>;
+      handler: (args: any) => Promise<any>;
+    }>;
+  }): void;
+
   // Logging
   log: {
     info(msg: string): void;
@@ -241,6 +253,114 @@ const plugin: SemanticMemoryPlugin = {
     // Register hooks
     api.on("session:beforeInject", (payload: any) => handleBeforeInject(api, payload));
     api.on("session:afterInject", (payload: any) => handleAfterInject(api, payload));
+
+    // Register A2A tools
+    if (api.registerA2AServer) {
+      api.registerA2AServer({
+        name: "semantic-memory",
+        description: "Semantic memory search with vector embeddings",
+        tools: [
+          {
+            name: "memory_search_semantic",
+            description: "Search memory using semantic/vector similarity. More accurate than keyword search for finding conceptually related content.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "Search query - finds semantically similar content",
+                },
+                maxResults: {
+                  type: "number",
+                  description: "Maximum results (default: 10)",
+                },
+                minScore: {
+                  type: "number",
+                  description: "Minimum relevance score 0-1 (default: 0.35)",
+                },
+              },
+              required: ["query"],
+            },
+            handler: async (args: { query: string; maxResults?: number; minScore?: number }) => {
+              if (!state.searchManager) {
+                return { content: [{ type: "text", text: "Semantic memory not initialized" }] };
+              }
+
+              const { query, maxResults = 10, minScore = 0.35 } = args;
+
+              try {
+                const results = await state.searchManager.search(query, maxResults);
+                const filtered = results.filter((r) => r.score >= minScore);
+
+                if (filtered.length === 0) {
+                  return { content: [{ type: "text", text: `No semantic matches found for "${query}"` }] };
+                }
+
+                const formatted = filtered
+                  .map(
+                    (r, i) =>
+                      `[${i + 1}] ${r.source}/${r.path}:${r.startLine}-${r.endLine} (score: ${r.score.toFixed(2)})\n${r.snippet}`
+                  )
+                  .join("\n\n---\n\n");
+
+                return {
+                  content: [{ type: "text", text: `Found ${filtered.length} semantic matches:\n\n${formatted}` }],
+                };
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                return { content: [{ type: "text", text: `Semantic search failed: ${message}` }] };
+              }
+            },
+          },
+          {
+            name: "memory_capture",
+            description: "Manually capture text to semantic memory for later recall.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                text: {
+                  type: "string",
+                  description: "Text to capture and store",
+                },
+                source: {
+                  type: "string",
+                  description: "Source identifier (default: 'manual')",
+                },
+              },
+              required: ["text"],
+            },
+            handler: async (args: { text: string; source?: string }) => {
+              if (!state.searchManager) {
+                return { content: [{ type: "text", text: "Semantic memory not initialized" }] };
+              }
+
+              const { text, source = "manual" } = args;
+
+              try {
+                const id = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                await state.searchManager.addEntry(
+                  {
+                    id,
+                    path: source,
+                    startLine: 0,
+                    endLine: 0,
+                    source,
+                    snippet: text.slice(0, 200),
+                  },
+                  text
+                );
+
+                return { content: [{ type: "text", text: `Captured to semantic memory: "${text.slice(0, 100)}..."` }] };
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                return { content: [{ type: "text", text: `Capture failed: ${message}` }] };
+              }
+            },
+          },
+        ],
+      });
+      api.log.info("[semantic-memory] Registered A2A tools: memory_search_semantic, memory_capture");
+    }
 
     api.log.info("[semantic-memory] Plugin registered");
   },
