@@ -24,5 +24,10 @@
     }
   },
   "keywords": ["wopr", "plugin", "memory", "semantic", "embeddings", "vector-search"],
-  "license": "MIT"
+  "license": "MIT",
+  "wopr": {
+    "plugin": {
+      "entry": "dist/index.js"
+    }
+  }
 }
