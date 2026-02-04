@@ -1,8 +1,11 @@
 /**
  * Vector and hybrid search for semantic memory
+ * With JSON file persistence for vector storage
  */
 
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { dirname } from "path";
 
 // =============================================================================
 // Hybrid Search Helpers (ported from WOPR core)
@@ -15,6 +18,7 @@ export type HybridVectorResult = {
   endLine: number;
   source: string;
   snippet: string;
+  content: string;      // Full indexed text for retrieval
   vectorScore: number;
 };
 
@@ -25,6 +29,7 @@ export type HybridKeywordResult = {
   endLine: number;
   source: string;
   snippet: string;
+  content: string;      // Full indexed text for retrieval
   textScore: number;
 };
 
@@ -61,6 +66,7 @@ export function mergeHybridResults(params: {
       endLine: number;
       source: string;
       snippet: string;
+      content: string;
       vectorScore: number;
       textScore: number;
     }
@@ -74,6 +80,7 @@ export function mergeHybridResults(params: {
       endLine: r.endLine,
       source: r.source,
       snippet: r.snippet,
+      content: r.content,
       vectorScore: r.vectorScore,
       textScore: 0,
     });
@@ -86,6 +93,9 @@ export function mergeHybridResults(params: {
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
+      if (r.content && r.content.length > 0) {
+        existing.content = r.content;
+      }
     } else {
       byId.set(r.id, {
         id: r.id,
@@ -94,6 +104,7 @@ export function mergeHybridResults(params: {
         endLine: r.endLine,
         source: r.source,
         snippet: r.snippet,
+        content: r.content,
         vectorScore: 0,
         textScore: r.textScore,
       });
@@ -108,6 +119,7 @@ export function mergeHybridResults(params: {
       endLine: entry.endLine,
       score,
       snippet: entry.snippet,
+      content: entry.content,
       source: entry.source,
     };
   });
@@ -137,6 +149,92 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 // =============================================================================
+// Persistence Layer
+// =============================================================================
+
+// Store data inside the plugin directory
+const PLUGIN_DATA_DIR = "/data/plugins/wopr-plugin-memory-semantic/data";
+const VECTOR_STORE_PATH = `${PLUGIN_DATA_DIR}/vectors.json`;
+const MTIME_STORE_PATH = `${PLUGIN_DATA_DIR}/mtimes.json`;
+
+interface PersistedVectorStore {
+  version: number;
+  entries: VectorEntry[];
+  lastSaved: number;
+}
+
+interface PersistedMtimeStore {
+  version: number;
+  mtimes: Record<string, number>; // path -> mtime
+  lastSaved: number;
+}
+
+function ensureDir(filePath: string): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+}
+
+function loadVectorStore(): VectorEntry[] {
+  try {
+    if (existsSync(VECTOR_STORE_PATH)) {
+      const data = readFileSync(VECTOR_STORE_PATH, "utf-8");
+      const store: PersistedVectorStore = JSON.parse(data);
+      if (store.version === 1 && Array.isArray(store.entries)) {
+        return store.entries;
+      }
+    }
+  } catch (err) {
+    console.error("[semantic-memory] Failed to load vector store:", err);
+  }
+  return [];
+}
+
+function saveVectorStore(entries: VectorEntry[]): void {
+  try {
+    ensureDir(VECTOR_STORE_PATH);
+    const store: PersistedVectorStore = {
+      version: 1,
+      entries,
+      lastSaved: Date.now(),
+    };
+    writeFileSync(VECTOR_STORE_PATH, JSON.stringify(store));
+  } catch (err) {
+    console.error("[semantic-memory] Failed to save vector store:", err);
+  }
+}
+
+export function loadMtimeStore(): Map<string, number> {
+  try {
+    if (existsSync(MTIME_STORE_PATH)) {
+      const data = readFileSync(MTIME_STORE_PATH, "utf-8");
+      const store: PersistedMtimeStore = JSON.parse(data);
+      if (store.version === 1 && store.mtimes) {
+        return new Map(Object.entries(store.mtimes));
+      }
+    }
+  } catch (err) {
+    console.error("[semantic-memory] Failed to load mtime store:", err);
+  }
+  return new Map();
+}
+
+export function saveMtimeStore(mtimes: Map<string, number>): void {
+  try {
+    ensureDir(MTIME_STORE_PATH);
+    const store: PersistedMtimeStore = {
+      version: 1,
+      mtimes: Object.fromEntries(mtimes),
+      lastSaved: Date.now(),
+    };
+    writeFileSync(MTIME_STORE_PATH, JSON.stringify(store));
+  } catch (err) {
+    console.error("[semantic-memory] Failed to save mtime store:", err);
+  }
+}
+
+// =============================================================================
 // Semantic Search Manager
 // =============================================================================
 
@@ -147,39 +245,66 @@ export interface VectorEntry {
   endLine: number;
   source: string;
   snippet: string;
+  content: string;      // Full indexed text for retrieval
   embedding: number[];
 }
 
 export interface SemanticSearchManager {
   search(query: string, maxResults?: number): Promise<MemorySearchResult[]>;
   addEntry(entry: Omit<VectorEntry, "embedding">, text: string): Promise<void>;
+  addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number>;
   close(): Promise<void>;
+  getEntryCount(): number;
+  hasEntry(id: string): boolean;
 }
 
 /**
  * Create a semantic search manager
- * Uses in-memory vector storage with optional persistence
+ * Uses JSON file persistence for vector storage
  */
 export async function createSemanticSearchManager(
   config: SemanticMemoryConfig,
   embeddingProvider: EmbeddingProvider,
   keywordSearchFn?: (query: string, limit: number) => Promise<HybridKeywordResult[]>
 ): Promise<SemanticSearchManager> {
-  // In-memory vector store
-  const vectors: VectorEntry[] = [];
+  // Load persisted vectors
+  const vectors: VectorEntry[] = loadVectorStore();
+  const existingIds = new Set(vectors.map(v => v.id));
+
+  console.log(`[semantic-memory] Loaded ${vectors.length} vectors from persistent storage`);
 
   // Embedding cache
   const embeddingCache = new Map<string, number[]>();
 
+  // Track if we need to save
+  let dirty = false;
+  let saveTimeout: NodeJS.Timeout | null = null;
+
+  // Debounced save - wait 5 seconds after last change before saving
+  const scheduleSave = () => {
+    dirty = true;
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+    }
+    saveTimeout = setTimeout(() => {
+      if (dirty) {
+        saveVectorStore(vectors);
+        dirty = false;
+      }
+    }, 5000);
+  };
+
   const getEmbedding = async (text: string): Promise<number[]> => {
-    const cacheKey = text.slice(0, 200); // Truncate for cache key
+    // Truncate text to ~4000 chars to stay safely under 8192 token limit
+    const truncatedText = text.length > 4000 ? text.slice(0, 4000) : text;
+
+    const cacheKey = truncatedText.slice(0, 200);
     const cached = embeddingCache.get(cacheKey);
     if (cached) return cached;
 
-    const embedding = await embeddingProvider.embedQuery(text);
+    const embedding = await embeddingProvider.embedQuery(truncatedText);
     if (config.cache.enabled) {
       embeddingCache.set(cacheKey, embedding);
-      // Evict old entries if cache is full
       if (config.cache.maxEntries && embeddingCache.size > config.cache.maxEntries) {
         const firstKey = embeddingCache.keys().next().value;
         if (firstKey) embeddingCache.delete(firstKey);
@@ -208,13 +333,9 @@ export async function createSemanticSearchManager(
       const limit = maxResults ?? config.search.maxResults;
       const candidateLimit = limit * config.search.candidateMultiplier;
 
-      // Get query embedding
       const queryEmbedding = await getEmbedding(query);
-
-      // Vector search
       const vectorResults = await vectorSearch(queryEmbedding, candidateLimit);
 
-      // If hybrid disabled or no keyword search function, return vector only
       if (!config.hybrid.enabled || !keywordSearchFn) {
         return vectorResults
           .filter((r) => r.vectorScore >= config.search.minScore)
@@ -225,14 +346,12 @@ export async function createSemanticSearchManager(
             endLine: r.endLine,
             score: r.vectorScore,
             snippet: r.snippet,
+            content: r.content,
             source: r.source,
           }));
       }
 
-      // Keyword search
       const keywordResults = await keywordSearchFn(query, candidateLimit);
-
-      // Merge results
       const merged = mergeHybridResults({
         vector: vectorResults,
         keyword: keywordResults,
@@ -244,13 +363,119 @@ export async function createSemanticSearchManager(
     },
 
     async addEntry(entry: Omit<VectorEntry, "embedding">, text: string): Promise<void> {
+      // Skip if already indexed
+      if (existingIds.has(entry.id)) {
+        return;
+      }
+
       const embedding = await getEmbedding(text);
       vectors.push({ ...entry, embedding });
+      existingIds.add(entry.id);
+      scheduleSave();
+    },
+
+    async addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number> {
+      // Filter out already indexed entries
+      const newEntries = entries.filter(e => !existingIds.has(e.entry.id));
+      if (newEntries.length === 0) return 0;
+
+      // Truncate texts to stay under token limit (~4000 chars = ~1000 tokens, safe under 8192)
+      const truncatedTexts = newEntries.map(e =>
+        e.text.length > 4000 ? e.text.slice(0, 4000) : e.text
+      );
+
+      // OpenAI limit: 300,000 tokens per request, ~4 chars per token
+      const MAX_TOKENS_PER_REQUEST = 280000; // Leave margin below 300k
+      const CHARS_PER_TOKEN = 4;
+      let addedCount = 0;
+
+      // Build batches based on actual token estimates
+      let batchStart = 0;
+      let batchNum = 0;
+      while (batchStart < truncatedTexts.length) {
+        let batchTokens = 0;
+        let batchEnd = batchStart;
+
+        // Add texts until we hit the token limit
+        while (batchEnd < truncatedTexts.length) {
+          const textTokens = Math.ceil(truncatedTexts[batchEnd].length / CHARS_PER_TOKEN);
+          if (batchTokens + textTokens > MAX_TOKENS_PER_REQUEST && batchEnd > batchStart) {
+            break; // This text would exceed limit, stop here
+          }
+          batchTokens += textTokens;
+          batchEnd++;
+        }
+
+        const batchTexts = truncatedTexts.slice(batchStart, batchEnd);
+        const batchEntries = newEntries.slice(batchStart, batchEnd);
+        batchNum++;
+
+        console.log(`[semantic-memory] Embedding batch ${batchNum} (${batchTexts.length} chunks, ~${batchTokens} tokens)...`);
+
+        // Retry with exponential backoff on rate limits
+        let embeddings: number[][] = [];
+        let retries = 0;
+        const maxRetries = 5;
+        while (retries < maxRetries) {
+          try {
+            embeddings = await embeddingProvider.embedBatch(batchTexts);
+            break;
+          } catch (err: any) {
+            const errMsg = err?.message || String(err);
+            // Check for rate limit (429) errors
+            if (errMsg.includes("429") || errMsg.includes("rate_limit") || errMsg.includes("Rate limit")) {
+              // Extract wait time from error message if present
+              const waitMatch = errMsg.match(/try again in (\d+\.?\d*)/i);
+              const waitSecs = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 1 : Math.pow(2, retries) * 5;
+              console.log(`[semantic-memory] Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}...`);
+              await new Promise(resolve => setTimeout(resolve, waitSecs * 1000));
+              retries++;
+            } else {
+              throw err; // Non-rate-limit error, propagate
+            }
+          }
+        }
+        if (retries >= maxRetries) {
+          throw new Error(`Failed after ${maxRetries} rate limit retries`);
+        }
+
+        batchStart = batchEnd;
+
+        for (let j = 0; j < batchEntries.length; j++) {
+          const { entry } = batchEntries[j];
+          const embedding = embeddings[j] || [];
+
+          vectors.push({ ...entry, embedding });
+          existingIds.add(entry.id);
+          addedCount++;
+        }
+      }
+
+      if (addedCount > 0) {
+        scheduleSave();
+      }
+
+      return addedCount;
     },
 
     async close(): Promise<void> {
+      // Force save on close
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+      }
+      if (dirty || vectors.length > 0) {
+        saveVectorStore(vectors);
+        console.log(`[semantic-memory] Final save: ${vectors.length} vectors`);
+      }
       embeddingCache.clear();
-      vectors.length = 0;
+    },
+
+    getEntryCount(): number {
+      return vectors.length;
+    },
+
+    hasEntry(id: string): boolean {
+      return existingIds.has(id);
     },
   };
 }

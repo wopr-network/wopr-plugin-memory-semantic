@@ -126,6 +126,7 @@ export interface MemorySearchResult {
   endLine: number;
   score: number;
   snippet: string;
+  content: string;      // Full indexed text for retrieval
   source: string;
 }
 

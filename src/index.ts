@@ -13,9 +13,86 @@
 import type { SemanticMemoryConfig, EmbeddingProvider, MemorySearchResult } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import { createEmbeddingProvider } from "./embeddings.js";
-import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
+import { createSemanticSearchManager, type SemanticSearchManager, loadMtimeStore, saveMtimeStore } from "./search.js";
 import { performAutoRecall, injectMemoriesIntoMessages } from "./recall.js";
 import { shouldCapture, extractCaptureCandidate, extractFromConversation } from "./capture.js";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { join } from "path";
+import { createHash } from "crypto";
+
+// Generate deterministic ID from content to avoid duplicates
+function contentHash(text: string): string {
+  return createHash('md5').update(text).digest('hex').slice(0, 12);
+}
+
+// =============================================================================
+// Text Chunking
+// =============================================================================
+
+/**
+ * Split text into chunks with overlap for better context continuity
+ * Tries to split on paragraph or sentence boundaries for better context
+ *
+ * @param text - The text to chunk
+ * @param maxChars - Maximum characters per chunk (default 4000)
+ * @param overlapChars - Characters to overlap between chunks (default 500)
+ */
+function chunkText(text: string, maxChars: number = 4000, overlapChars: number = 500): string[] {
+  if (text.length <= maxChars) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    // Calculate end position
+    let end = Math.min(start + maxChars, text.length);
+
+    // If this is the last chunk, just take everything
+    if (end >= text.length) {
+      chunks.push(text.slice(start).trim());
+      break;
+    }
+
+    // Try to find a good split point (paragraph, then sentence, then word)
+    const searchStart = start + Math.floor(maxChars * 0.5);
+    const searchText = text.slice(start, end);
+
+    // Look for paragraph break (double newline) in the second half
+    let splitAt = searchText.lastIndexOf("\n\n");
+    if (splitAt > searchText.length * 0.5) {
+      end = start + splitAt + 2;
+    } else {
+      // Look for single newline
+      splitAt = searchText.lastIndexOf("\n");
+      if (splitAt > searchText.length * 0.5) {
+        end = start + splitAt + 1;
+      } else {
+        // Look for sentence end
+        splitAt = searchText.lastIndexOf(". ");
+        if (splitAt > searchText.length * 0.5) {
+          end = start + splitAt + 2;
+        } else {
+          // Look for word boundary
+          splitAt = searchText.lastIndexOf(" ");
+          if (splitAt > searchText.length * 0.3) {
+            end = start + splitAt + 1;
+          }
+          // Otherwise just split at maxChars
+        }
+      }
+    }
+
+    chunks.push(text.slice(start, end).trim());
+
+    // Move start position back by overlap amount for context continuity
+    start = end - overlapChars;
+    if (start < 0) start = end; // Prevent negative start
+  }
+
+  return chunks.filter(c => c.length > 0);
+}
 
 // =============================================================================
 // Plugin State
@@ -26,6 +103,9 @@ interface PluginState {
   embeddingProvider: EmbeddingProvider | null;
   searchManager: SemanticSearchManager | null;
   initialized: boolean;
+  indexedFiles: Map<string, number>; // path -> mtime for incremental indexing
+  lastIncrementalIndex: number; // timestamp of last incremental check
+  startupIndexingComplete: boolean; // flag to skip incremental until startup done
 }
 
 const state: PluginState = {
@@ -33,6 +113,9 @@ const state: PluginState = {
   embeddingProvider: null,
   searchManager: null,
   initialized: false,
+  indexedFiles: new Map(),
+  lastIncrementalIndex: 0,
+  startupIndexingComplete: false,
 };
 
 // =============================================================================
@@ -40,8 +123,15 @@ const state: PluginState = {
 // =============================================================================
 
 interface WoprPluginApi {
-  // Hook registration - handlers can return mutated payloads
+  // Hook registration - handlers can return mutated payloads (legacy)
   on(event: string, handler: (...args: any[]) => any): void;
+
+  // Event bus for registering event handlers
+  events: {
+    on(event: string, handler: (...args: any[]) => any): () => void;
+    off(event: string, handler: (...args: any[]) => any): void;
+    emit(event: string, payload: any): Promise<void>;
+  };
 
   // Memory tools (provided by core)
   memory?: {
@@ -106,6 +196,7 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
             endLine: r.endLine || 0,
             source: r.source || "memory",
             snippet: r.snippet || r.content || "",
+            content: r.content || r.snippet || "",  // Use content if available, fallback to snippet
             textScore: r.score || 0,
           }));
         }
@@ -117,13 +208,296 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
       keywordSearchFn
     );
 
+    // Load persisted mtimes for incremental indexing
+    state.indexedFiles = loadMtimeStore();
+    api.log.info(`[semantic-memory] Loaded ${state.indexedFiles.size} file mtimes from persistent storage`);
+
+    const loadedVectors = state.searchManager.getEntryCount();
     state.initialized = true;
-    api.log.info("[semantic-memory] Initialized");
+    api.log.info(`[semantic-memory] Initialized with ${loadedVectors} persisted vectors`);
+
+    // If we have persisted vectors, mark startup indexing as complete
+    // Only run background indexing if we have no persisted data
+    if (loadedVectors > 0) {
+      state.startupIndexingComplete = true;
+      state.lastIncrementalIndex = Date.now();
+      api.log.info("[semantic-memory] Using persisted index, skipping startup indexing");
+    } else {
+      // Index existing memory files on startup (run in background to not block init)
+      indexExistingMemoryFiles(api).catch((err) => {
+        api.log.error(`[semantic-memory] Background indexing failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
   } catch (err) {
     api.log.error(
       `[semantic-memory] Failed to initialize: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+
+// =============================================================================
+// Startup Indexing
+// =============================================================================
+
+/**
+ * Index existing memory files on startup
+ * Scans /data/identity and /data/identity/memory for markdown files
+ * Tracks file mtimes for incremental indexing
+ */
+async function indexExistingMemoryFiles(api: WoprPluginApi): Promise<void> {
+  api.log.info("[semantic-memory] Starting startup indexing (BATCH MODE)...");
+
+  if (!state.searchManager) {
+    api.log.error("[semantic-memory] Startup indexing aborted: searchManager is null");
+    return;
+  }
+
+  const memoryDirs = [
+    "/data/identity",
+    "/data/identity/memory",
+    "/data/sessions",  // Session transcripts
+  ];
+
+  // Collect ALL entries first, then batch embed
+  type PendingEntry = { entry: Omit<import("./search.js").VectorEntry, "embedding">; text: string };
+  const allEntries: PendingEntry[] = [];
+  const timestamp = Date.now();
+
+  for (const dir of memoryDirs) {
+    if (!existsSync(dir)) {
+      api.log.info(`[semantic-memory] Directory does not exist, skipping: ${dir}`);
+      continue;
+    }
+
+    try {
+      const files = readdirSync(dir);
+      const mdFiles = files.filter(f => f.endsWith(".md"));
+      const jsonlFiles = files.filter(f => f.endsWith(".conversation.jsonl"));
+      api.log.info(`[semantic-memory] Scanning ${dir}: ${mdFiles.length} .md, ${jsonlFiles.length} .jsonl`);
+
+      for (const file of files) {
+        const filePath = join(dir, file);
+        let stat;
+        try {
+          stat = statSync(filePath);
+        } catch {
+          continue;
+        }
+        if (!stat.isFile()) continue;
+
+        // Track mtime for incremental indexing
+        state.indexedFiles.set(filePath, stat.mtimeMs);
+
+        try {
+          // Handle markdown files
+          if (file.endsWith(".md")) {
+            const content = readFileSync(filePath, "utf-8");
+            if (content.length < 10) continue;
+
+            const chunks = chunkText(content, 4000, 500);
+            for (let i = 0; i < chunks.length; i++) {
+              const chunk = chunks[i];
+              allEntries.push({
+                entry: {
+                  id: `mem-${contentHash(chunk)}`,
+                  path: filePath,
+                  startLine: i * 100,
+                  endLine: (i + 1) * 100,
+                  source: "memory",
+                  snippet: chunk.slice(0, 500),
+                  content: chunk,
+                },
+                text: chunk,
+              });
+            }
+          }
+          // Handle JSONL conversation logs - index each message individually
+          else if (file.endsWith(".conversation.jsonl")) {
+            const content = readFileSync(filePath, "utf-8");
+            const lines = content.split("\n").filter(l => l.trim());
+
+            let msgNum = 0;
+            for (const line of lines) {
+              try {
+                const entry = JSON.parse(line);
+                if (entry.content && entry.content.trim().length > 0) {
+                  allEntries.push({
+                    entry: {
+                      id: `msg-${contentHash(entry.content)}`,
+                      path: filePath,
+                      startLine: msgNum,
+                      endLine: msgNum,
+                      source: "sessions",
+                      snippet: entry.content.slice(0, 500),
+                      content: entry.content,
+                    },
+                    text: entry.content,
+                  });
+                  msgNum++;
+                }
+              } catch {}
+            }
+          }
+        } catch (err) {
+          api.log.error(`[semantic-memory] Failed to read ${filePath}: ${err}`);
+        }
+      }
+    } catch (err) {
+      api.log.error(`[semantic-memory] Failed to scan ${dir}: ${err}`);
+    }
+  }
+
+  // Now batch embed all entries (up to 2000 per API call)
+  api.log.info(`[semantic-memory] Collected ${allEntries.length} chunks, starting batch embedding...`);
+
+  const startTime = Date.now();
+  const indexedCount = await state.searchManager.addEntriesBatch(allEntries);
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+  state.lastIncrementalIndex = Date.now();
+  state.startupIndexingComplete = true;
+
+  // Save mtimes to persistent storage
+  saveMtimeStore(state.indexedFiles);
+
+  if (indexedCount > 0) {
+    api.log.info(`[semantic-memory] Indexed ${indexedCount} entries in ${elapsed}s (batch mode)`);
+  }
+  api.log.info(`[semantic-memory] Startup indexing complete, incremental indexing enabled`);
+}
+
+/**
+ * Incremental indexing - only index new or changed files since last check
+ * Called before each search to capture recent session content
+ */
+async function incrementalIndexFiles(api: WoprPluginApi): Promise<number> {
+  if (!state.searchManager) return 0;
+
+  // Skip incremental indexing until startup indexing is complete
+  // This prevents blocking searches while re-indexing all files on first search
+  if (!state.startupIndexingComplete) {
+    return 0;
+  }
+
+  // Throttle: don't check more than once per 5 seconds
+  const now = Date.now();
+  if (now - state.lastIncrementalIndex < 5000) {
+    return 0;
+  }
+
+  const memoryDirs = [
+    "/data/identity",
+    "/data/identity/memory",
+    "/data/sessions",
+  ];
+
+  let indexedCount = 0;
+
+  for (const dir of memoryDirs) {
+    if (!existsSync(dir)) continue;
+
+    try {
+      const files = readdirSync(dir);
+      for (const file of files) {
+        const filePath = join(dir, file);
+
+        let stat;
+        try {
+          stat = statSync(filePath);
+        } catch {
+          continue; // File may have been deleted
+        }
+
+        if (!stat.isFile()) continue;
+
+        const mtime = stat.mtimeMs;
+        const lastMtime = state.indexedFiles.get(filePath);
+
+        // Skip if file hasn't changed
+        if (lastMtime !== undefined && mtime <= lastMtime) {
+          continue;
+        }
+
+        // Log what file changed
+        api.log.info(`[semantic-memory] File changed: ${file} (mtime: ${lastMtime} -> ${mtime})`);
+
+        // Update tracked mtime
+        state.indexedFiles.set(filePath, mtime);
+
+        try {
+          // Handle markdown files
+          if (file.endsWith(".md")) {
+            const content = readFileSync(filePath, "utf-8");
+            if (content.length < 10) continue;
+
+            const chunks = chunkText(content, 4000, 500);
+            for (let i = 0; i < chunks.length; i++) {
+              const chunk = chunks[i];
+              const id = `mem-${contentHash(chunk)}`;
+              await state.searchManager!.addEntry(
+                {
+                  id,
+                  path: filePath,
+                  startLine: i * 100,
+                  endLine: (i + 1) * 100,
+                  source: "memory",
+                  snippet: chunk.slice(0, 500),
+                  content: chunk,
+                },
+                chunk
+              );
+              indexedCount++;
+            }
+          }
+          // Handle JSONL conversation logs - index each message individually for stability
+          else if (file.endsWith(".conversation.jsonl")) {
+            const content = readFileSync(filePath, "utf-8");
+            const lines = content.split("\n").filter(l => l.trim());
+
+            let msgNum = 0;
+            for (const line of lines) {
+              try {
+                const entry = JSON.parse(line);
+                if (entry.content && entry.content.trim().length > 0) {
+                  // Index each message individually - stable IDs even as file grows
+                  const id = `msg-${contentHash(entry.content)}`;
+                  // Skip if already indexed (content hash ensures dedup)
+                  if (state.searchManager!.hasEntry(id)) continue;
+
+                  await state.searchManager!.addEntry(
+                    {
+                      id,
+                      path: filePath,
+                      startLine: msgNum,
+                      endLine: msgNum,
+                      source: "sessions",
+                      snippet: entry.content.slice(0, 500),
+                      content: entry.content,
+                    },
+                    entry.content
+                  );
+                  indexedCount++;
+                  msgNum++;
+                }
+              } catch {}
+            }
+          }
+        } catch (err) {
+          api.log.error(`[semantic-memory] Failed to incremental index ${filePath}: ${err}`);
+        }
+      }
+    } catch (err) {
+      api.log.error(`[semantic-memory] Failed to scan ${dir} for incremental: ${err}`);
+    }
+  }
+
+  state.lastIncrementalIndex = now;
+
+  if (indexedCount > 0) {
+    api.log.info(`[semantic-memory] Incremental indexed ${indexedCount} new entries`);
+  }
+
+  return indexedCount;
 }
 
 // =============================================================================
@@ -135,20 +509,19 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
  */
 async function handleBeforeInject(
   api: WoprPluginApi,
-  payload: {
-    sessionName: string;
-    messages: Array<{ role: string; content: string }>;
-  }
-): Promise<{ messages: Array<{ role: string; content: string }> } | void> {
+  payload: any
+): Promise<void> {
   if (!state.initialized || !state.searchManager || !state.config.autoRecall.enabled) {
     return;
   }
 
-  // Find the last user message
-  const lastUserMessage = payload.messages.filter((m) => m.role === "user").pop();
-  if (!lastUserMessage) {
+  // Payload is SessionInjectEvent: { session, message, from, channel? }
+  // Not the expected messages array - skip for now until payload interface is resolved
+  if (!payload || typeof payload.message !== "string" || !payload.message.trim()) {
     return;
   }
+
+  const lastUserMessage = { role: "user", content: payload.message };
 
   try {
     const recall = await performAutoRecall(
@@ -158,13 +531,11 @@ async function handleBeforeInject(
     );
 
     if (recall && recall.memories.length > 0) {
-      api.log.debug(
+      api.log.info(
         `[semantic-memory] Recalled ${recall.memories.length} memories for: "${recall.query.slice(0, 50)}..."`
       );
-
-      // Inject memories into messages
-      const enhancedMessages = injectMemoriesIntoMessages(payload.messages, recall);
-      return { messages: enhancedMessages };
+      // Note: Can't inject memories through event bus - would need mutable payload support
+      // For now, just log that we found relevant memories
     }
   } catch (err) {
     api.log.error(
@@ -174,50 +545,109 @@ async function handleBeforeInject(
 }
 
 /**
- * After inject hook - auto-capture important information
+ * After inject hook - real-time indexing of ALL session content
+ * Payload is SessionResponseEvent: { session, message, response, from }
  */
 async function handleAfterInject(
   api: WoprPluginApi,
-  payload: {
-    sessionName: string;
-    messages: Array<{ role: string; content: string }>;
-    response?: string;
-  }
+  payload: any
 ): Promise<void> {
-  if (!state.initialized || !state.searchManager || !state.config.autoCapture.enabled) {
+  if (!state.initialized || !state.searchManager) {
     return;
   }
 
+  // Validate payload structure
+  if (!payload || typeof payload.response !== "string" || !payload.response.trim()) {
+    return;
+  }
+
+  const sessionName = payload.session || "unknown";
+  let indexedCount = 0;
+
   try {
-    // Extract capturable content from the conversation
-    const candidates = extractFromConversation(payload.messages, state.config);
-
-    if (candidates.length === 0) {
-      return;
+    // REAL-TIME INDEXING: Index ALL session content immediately with full text
+    // Index user message if present
+    if (payload.message && payload.message.trim().length > 10) {
+      const userChunks = chunkText(payload.message, 4000, 500);
+      for (let i = 0; i < userChunks.length; i++) {
+        const chunk = userChunks[i];
+        const id = `rt-${contentHash(chunk)}`;
+        await state.searchManager.addEntry(
+          {
+            id,
+            path: `session:${sessionName}`,
+            startLine: 0,
+            endLine: 0,
+            source: "realtime-user",
+            snippet: chunk.slice(0, 500),
+            content: chunk,
+          },
+          chunk
+        );
+        indexedCount++;
+      }
     }
 
-    api.log.debug(`[semantic-memory] Found ${candidates.length} capture candidates`);
-
-    // Store each candidate
-    for (const candidate of candidates) {
-      const id = `capture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await state.searchManager.addEntry(
-        {
-          id,
-          path: `session:${payload.sessionName}`,
-          startLine: 0,
-          endLine: 0,
-          source: "auto-capture",
-          snippet: candidate.text.slice(0, 200),
-        },
-        candidate.text
-      );
+    // Index assistant response
+    if (payload.response.trim().length > 10) {
+      const responseChunks = chunkText(payload.response, 4000, 500);
+      for (let i = 0; i < responseChunks.length; i++) {
+        const chunk = responseChunks[i];
+        const id = `rt-${contentHash(chunk)}`;
+        await state.searchManager.addEntry(
+          {
+            id,
+            path: `session:${sessionName}`,
+            startLine: 0,
+            endLine: 0,
+            source: "realtime-assistant",
+            snippet: chunk.slice(0, 500),
+            content: chunk,
+          },
+          chunk
+        );
+        indexedCount++;
+      }
     }
 
-    api.log.info(`[semantic-memory] Captured ${candidates.length} memories`);
+    if (indexedCount > 0) {
+      api.log.info(`[semantic-memory] Real-time indexed ${indexedCount} chunks from session ${sessionName}`);
+    }
+
+    // ALSO run capture analysis for important content (if enabled)
+    if (state.config.autoCapture.enabled) {
+      const messages = [
+        { role: "user" as const, content: payload.message || "" },
+        { role: "assistant" as const, content: payload.response },
+      ];
+
+      const candidates = extractFromConversation(messages, state.config);
+
+      if (candidates.length > 0) {
+        api.log.info(`[semantic-memory] Found ${candidates.length} capture candidates`);
+
+        for (const candidate of candidates) {
+          const id = `cap-${contentHash(candidate.text)}`;
+          await state.searchManager.addEntry(
+            {
+              id,
+              path: `session:${sessionName}`,
+              startLine: 0,
+              endLine: 0,
+              source: "auto-capture",
+              snippet: candidate.text.slice(0, 500),
+              content: candidate.text,
+            },
+            candidate.text
+          );
+        }
+
+        api.log.info(`[semantic-memory] Captured ${candidates.length} memories`);
+      }
+    }
   } catch (err) {
     api.log.error(
-      `[semantic-memory] Auto-capture failed: ${err instanceof Error ? err.message : String(err)}`
+      `[semantic-memory] Real-time indexing failed: ${err instanceof Error ? err.message : String(err)}`
     );
   }
 }
@@ -232,8 +662,8 @@ export interface SemanticMemoryPlugin {
   description: string;
   version: string;
 
-  register(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>): Promise<void>;
-  unregister(): Promise<void>;
+  init(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>): Promise<void>;
+  shutdown(): Promise<void>;
 
   // Public API
   search(query: string, maxResults?: number): Promise<MemorySearchResult[]>;
@@ -247,44 +677,62 @@ const plugin: SemanticMemoryPlugin = {
   description: "Semantic memory search with embeddings, auto-recall, and auto-capture",
   version: "1.0.0",
 
-  async register(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>) {
+  async init(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>) {
+    api.log.info("[semantic-memory] init() called");
     await initialize(api, config);
 
-    // Register hooks
-    api.on("session:beforeInject", (payload: any) => handleBeforeInject(api, payload));
-    api.on("session:afterInject", (payload: any) => handleAfterInject(api, payload));
+    // Register hooks via the event bus
+    api.events.on("session:beforeInject", (payload: any) => handleBeforeInject(api, payload));
+    api.events.on("session:afterInject", (payload: any) => handleAfterInject(api, payload));
 
     // Hook into memory_search to provide semantic results
-    api.on("memory:search", async (payload: {
+    api.events.on("memory:search", async (payload: {
       query: string;
       maxResults: number;
       minScore: number;
       sessionName: string;
       results: any[] | null;
     }) => {
+      api.log.info(`[semantic-memory] memory:search handler called for: "${payload.query}"`);
+
       if (!state.initialized || !state.searchManager) {
+        api.log.info(`[semantic-memory] Not initialized, skipping (initialized=${state.initialized})`);
         return;
       }
 
       try {
+        // Incremental index check before search (catches file-based changes)
+        // Real-time session content is already indexed via session:afterInject
+        const newEntries = await incrementalIndexFiles(api);
+        if (newEntries > 0) {
+          api.log.info(`[semantic-memory] Pre-search incremental index added ${newEntries} entries`);
+        }
+
+        api.log.info(`[semantic-memory] Starting semantic search...`);
         const results = await state.searchManager.search(payload.query, payload.maxResults);
+        api.log.info(`[semantic-memory] Raw results: ${results.length}`);
         payload.results = results.filter((r) => r.score >= payload.minScore);
-        api.log.debug(`[semantic-memory] Provided ${payload.results.length} results`);
+        api.log.info(`[semantic-memory] After filter: ${payload.results.length} results (minScore: ${payload.minScore})`);
       } catch (err) {
         api.log.error(`[semantic-memory] Search failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
 
-    api.log.info("[semantic-memory] Plugin registered - memory_search enhanced with semantic search");
+    api.log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 
-  async unregister() {
+  async shutdown() {
+    // Save mtimes before shutdown
+    if (state.indexedFiles.size > 0) {
+      saveMtimeStore(state.indexedFiles);
+    }
     if (state.searchManager) {
       await state.searchManager.close();
       state.searchManager = null;
     }
     state.embeddingProvider = null;
     state.initialized = false;
+    state.startupIndexingComplete = false;
   },
 
   async search(query: string, maxResults?: number): Promise<MemorySearchResult[]> {
@@ -300,7 +748,7 @@ const plugin: SemanticMemoryPlugin = {
     }
 
     const candidate = extractCaptureCandidate(text);
-    const id = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = `man-${contentHash(text)}`;
 
     await state.searchManager.addEntry(
       {
@@ -309,7 +757,8 @@ const plugin: SemanticMemoryPlugin = {
         startLine: 0,
         endLine: 0,
         source,
-        snippet: text.slice(0, 200),
+        snippet: text.slice(0, 500),
+        content: text,
       },
       text
     );
