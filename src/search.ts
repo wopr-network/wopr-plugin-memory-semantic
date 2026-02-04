@@ -51,6 +51,17 @@ export function bm25RankToScore(rank: number): number {
   return 1 / (1 + normalized);
 }
 
+/**
+ * Merge vector-based and keyword-based search hits into a single ranked list.
+ *
+ * Merges results by id, combining `vectorScore` and `textScore` using the provided weights, and prefers keyword-provided `snippet` and `content` when available.
+ *
+ * @param params.vector - Array of vector search hits; each hit's `vectorScore` contributes to the combined score.
+ * @param params.keyword - Array of keyword search hits; each hit's `textScore` contributes to the combined score.
+ * @param params.vectorWeight - Multiplier applied to each hit's `vectorScore` when computing the combined score.
+ * @param params.textWeight - Multiplier applied to each hit's `textScore` when computing the combined score.
+ * @returns An array of merged search results sorted by descending combined score (combined score = `vectorWeight * vectorScore + textWeight * textScore`).
+ */
 export function mergeHybridResults(params: {
   vector: HybridVectorResult[];
   keyword: HybridKeywordResult[];
@@ -129,7 +140,13 @@ export function mergeHybridResults(params: {
 
 // =============================================================================
 // Cosine Similarity
-// =============================================================================
+/**
+ * Compute the cosine similarity between two numeric vectors.
+ *
+ * @param a - First vector of numbers
+ * @param b - Second vector of numbers
+ * @returns The cosine similarity between `a` and `b` (between -1 and 1). Returns `0` if the vectors have different lengths, length is zero, or either vector has zero magnitude.
+ */
 
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length || a.length === 0) return 0;
@@ -169,6 +186,11 @@ interface PersistedMtimeStore {
   lastSaved: number;
 }
 
+/**
+ * Ensures the directory containing the given file path exists, creating it recursively if necessary.
+ *
+ * @param filePath - Path to a file; its parent directory will be created if it does not exist
+ */
 function ensureDir(filePath: string): void {
   const dir = dirname(filePath);
   if (!existsSync(dir)) {
@@ -176,6 +198,13 @@ function ensureDir(filePath: string): void {
   }
 }
 
+/**
+ * Load persisted vector entries from the configured VECTOR_STORE_PATH JSON file.
+ *
+ * Attempts to read and parse the file; if it contains a version-1 store with an `entries` array, those entries are returned.
+ *
+ * @returns The array of persisted `VectorEntry` objects when a valid version-1 store is present, otherwise an empty array.
+ */
 function loadVectorStore(): VectorEntry[] {
   try {
     if (existsSync(VECTOR_STORE_PATH)) {
@@ -191,6 +220,13 @@ function loadVectorStore(): VectorEntry[] {
   return [];
 }
 
+/**
+ * Persists the supplied vector entries to the configured vector store file on disk.
+ *
+ * Ensures the store directory exists, writes a versioned snapshot containing the entries and a timestamp, and logs an error if saving fails.
+ *
+ * @param entries - Array of vector entries to persist; this replaces the on-disk store contents.
+ */
 function saveVectorStore(entries: VectorEntry[]): void {
   try {
     ensureDir(VECTOR_STORE_PATH);
@@ -205,6 +241,13 @@ function saveVectorStore(entries: VectorEntry[]): void {
   }
 }
 
+/**
+ * Loads the persisted file modification times map from disk.
+ *
+ * Reads the MTIME_STORE_PATH JSON store (expected shape: version 1 with an `mtimes` object) and returns its entries as a Map of file path to mtime. If the file is missing, invalid, wrong version, or an error occurs, returns an empty Map.
+ *
+ * @returns A Map where keys are file path strings and values are modification times (numbers). 
+ */
 export function loadMtimeStore(): Map<string, number> {
   try {
     if (existsSync(MTIME_STORE_PATH)) {
@@ -220,6 +263,11 @@ export function loadMtimeStore(): Map<string, number> {
   return new Map();
 }
 
+/**
+ * Persists a map of file modification times to disk at the MTIME_STORE_PATH as a versioned JSON store.
+ *
+ * @param mtimes - Map whose keys are file identifiers (typically file paths) and values are modification timestamps in milliseconds since the UNIX epoch
+ */
 export function saveMtimeStore(mtimes: Map<string, number>): void {
   try {
     ensureDir(MTIME_STORE_PATH);
@@ -259,8 +307,17 @@ export interface SemanticSearchManager {
 }
 
 /**
- * Create a semantic search manager
- * Uses JSON file persistence for vector storage
+ * Create a SemanticSearchManager that provides vector search and optional hybrid (vector + keyword) search
+ * with on-disk JSON persistence for vectors.
+ *
+ * The manager loads persisted vectors on startup, maintains an in-memory embedding cache (configurable),
+ * performs debounced saves to disk, avoids indexing duplicate ids, and supports batch embedding with
+ * token-aware batching and exponential backoff on rate limits.
+ *
+ * @param config - Configuration for search, hybrid behavior, and caching (e.g., maxResults, candidateMultiplier, minScore, hybrid weights, cache settings)
+ * @param embeddingProvider - Provider used to generate embeddings for queries and texts (supports single and batch embedding)
+ * @param keywordSearchFn - Optional keyword search function used when hybrid search is enabled; receives (query, limit) and returns keyword hits
+ * @returns A SemanticSearchManager exposing search, addEntry, addEntriesBatch, close, getEntryCount, and hasEntry methods
  */
 export async function createSemanticSearchManager(
   config: SemanticMemoryConfig,

@@ -20,7 +20,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import { createHash } from "crypto";
 
-// Generate deterministic ID from content to avoid duplicates
+/**
+ * Produce a deterministic 12-hex identifier for a piece of text.
+ *
+ * @param text - The input content to hash
+ * @returns A 12-character hexadecimal identifier derived from the MD5 hash of `text`
+ */
 function contentHash(text: string): string {
   return createHash('md5').update(text).digest('hex').slice(0, 12);
 }
@@ -30,12 +35,14 @@ function contentHash(text: string): string {
 // =============================================================================
 
 /**
- * Split text into chunks with overlap for better context continuity
- * Tries to split on paragraph or sentence boundaries for better context
+ * Split input text into trimmed chunks while preserving contextual overlap.
+ *
+ * Prefers splitting at paragraph, sentence, or word boundaries when possible and falls back to fixed-size splits.
  *
  * @param text - The text to chunk
  * @param maxChars - Maximum characters per chunk (default 4000)
- * @param overlapChars - Characters to overlap between chunks (default 500)
+ * @param overlapChars - Number of characters to overlap between adjacent chunks (default 500)
+ * @returns An array of non-empty, trimmed text chunks that include overlapping context between neighbors
  */
 function chunkText(text: string, maxChars: number = 4000, overlapChars: number = 500): string[] {
   if (text.length <= maxChars) {
@@ -161,7 +168,18 @@ interface WoprPluginApi {
 
 // =============================================================================
 // Initialization
-// =============================================================================
+/**
+ * Initialize the semantic memory plugin and prepare embedding and search providers.
+ *
+ * Merges `userConfig` with plugin defaults, creates an embedding provider and a
+ * semantic search manager (optionally wiring core keyword search), loads persisted
+ * file mtimes for incremental indexing, and sets internal initialization state.
+ * If persisted vectors exist, marks startup indexing complete; otherwise kicks off
+ * background startup indexing of existing memory files.
+ *
+ * @param userConfig - Partial configuration to override defaults; nested sections
+ *   (`search`, `hybrid`, `autoRecall`, `autoCapture`, `store`, `cache`, `chunking`)
+ *   are merged with their respective defaults.
 
 async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemoryConfig>) {
   if (state.initialized) return;
@@ -240,9 +258,11 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
 // =============================================================================
 
 /**
- * Index existing memory files on startup
- * Scans /data/identity and /data/identity/memory for markdown files
- * Tracks file mtimes for incremental indexing
+ * Scans configured memory directories for markdown and session files, creates chunked memory entries, and batch-indexes them into the semantic search manager.
+ *
+ * Scanned files are recorded in plugin state for incremental indexing; the search manager is populated, state flags are updated, and file mtimes are persisted.
+ *
+ * @param api - Plugin API used for logging and access to core services
  */
 async function indexExistingMemoryFiles(api: WoprPluginApi): Promise<void> {
   api.log.info("[semantic-memory] Starting startup indexing (BATCH MODE)...");
@@ -367,8 +387,12 @@ async function indexExistingMemoryFiles(api: WoprPluginApi): Promise<void> {
 }
 
 /**
- * Incremental indexing - only index new or changed files since last check
- * Called before each search to capture recent session content
+ * Indexes new or changed memory and session files since the last check.
+ *
+ * Scans configured memory directories for modified Markdown and conversation JSONL files, adds any new or updated chunks/messages to the semantic search manager, and updates internal indexing state (mtimes and last-check timestamp). The function is a no-op if the search manager is unavailable or startup indexing has not completed, and it is rate-limited to avoid frequent scans.
+ *
+ * @param api - The WOPR plugin API used for logging and access to core services
+ * @returns The number of newly indexed entries during this run
  */
 async function incrementalIndexFiles(api: WoprPluginApi): Promise<number> {
   if (!state.searchManager) return 0;
@@ -505,7 +529,13 @@ async function incrementalIndexFiles(api: WoprPluginApi): Promise<number> {
 // =============================================================================
 
 /**
- * Before inject hook - auto-recall relevant memories
+ * Initiates an automatic memory recall before a message is injected into a session.
+ *
+ * When the plugin is initialized and auto-recall is enabled, examines the provided
+ * session inject payload for a user message, runs a semantic recall against the
+ * configured search manager, and logs any recalled memories or errors.
+ *
+ * @param payload - The session inject event payload; expected to contain a `message` string (may also include `session`, `from`, and optional `channel`). If `message` is missing or empty, no action is taken.
  */
 async function handleBeforeInject(
   api: WoprPluginApi,
@@ -545,8 +575,14 @@ async function handleBeforeInject(
 }
 
 /**
- * After inject hook - real-time indexing of ALL session content
- * Payload is SessionResponseEvent: { session, message, response, from }
+ * Indexes the current session's user message and assistant response into semantic memory and runs optional auto-capture.
+ *
+ * When invoked, this hook will chunk and add the session's user message and assistant response to the search manager,
+ * logging the number of indexed chunks. If auto-capture is enabled it will also extract and store capture candidates
+ * from the two-turn exchange. Short or empty responses are ignored.
+ *
+ * @param payload - SessionResponseEvent with shape `{ session?: string, message?: string, response: string, from?: string }`.
+ *   Only `response` is required; `message` and `session` are used when present. Messages shorter than ~10 characters are skipped.
  */
 async function handleAfterInject(
   api: WoprPluginApi,
