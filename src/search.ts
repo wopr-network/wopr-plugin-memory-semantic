@@ -1,11 +1,26 @@
 /**
  * Vector and hybrid search for semantic memory
- * With JSON file persistence for vector storage
+ * Uses usearch HNSW index for O(log n) approximate nearest neighbor search
  */
 
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
+import { Index, MetricKind, ScalarKind } from "usearch";
+import winston from "winston";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+
+const log = winston.createLogger({
+  level: "debug",
+  format: winston.format.combine(
+    winston.format.timestamp({ format: "HH:mm:ss.SSS" }),
+    winston.format.printf(({ timestamp, level, message }) =>
+      `${timestamp} [semantic-search] ${level}: ${message}`
+    ),
+  ),
+  transports: [new winston.transports.Console()],
+});
 
 // =============================================================================
 // Hybrid Search Helpers (ported from WOPR core)
@@ -128,113 +143,6 @@ export function mergeHybridResults(params: {
 }
 
 // =============================================================================
-// Cosine Similarity
-// =============================================================================
-
-export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom > 0 ? dot / denom : 0;
-}
-
-// =============================================================================
-// Persistence Layer
-// =============================================================================
-
-// Store data inside the plugin directory
-const PLUGIN_DATA_DIR = "/data/plugins/wopr-plugin-memory-semantic/data";
-const VECTOR_STORE_PATH = `${PLUGIN_DATA_DIR}/vectors.json`;
-const MTIME_STORE_PATH = `${PLUGIN_DATA_DIR}/mtimes.json`;
-
-interface PersistedVectorStore {
-  version: number;
-  entries: VectorEntry[];
-  lastSaved: number;
-}
-
-interface PersistedMtimeStore {
-  version: number;
-  mtimes: Record<string, number>; // path -> mtime
-  lastSaved: number;
-}
-
-function ensureDir(filePath: string): void {
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-}
-
-function loadVectorStore(): VectorEntry[] {
-  try {
-    if (existsSync(VECTOR_STORE_PATH)) {
-      const data = readFileSync(VECTOR_STORE_PATH, "utf-8");
-      const store: PersistedVectorStore = JSON.parse(data);
-      if (store.version === 1 && Array.isArray(store.entries)) {
-        return store.entries;
-      }
-    }
-  } catch (err) {
-    console.error("[semantic-memory] Failed to load vector store:", err);
-  }
-  return [];
-}
-
-function saveVectorStore(entries: VectorEntry[]): void {
-  try {
-    ensureDir(VECTOR_STORE_PATH);
-    const store: PersistedVectorStore = {
-      version: 1,
-      entries,
-      lastSaved: Date.now(),
-    };
-    writeFileSync(VECTOR_STORE_PATH, JSON.stringify(store));
-  } catch (err) {
-    console.error("[semantic-memory] Failed to save vector store:", err);
-  }
-}
-
-export function loadMtimeStore(): Map<string, number> {
-  try {
-    if (existsSync(MTIME_STORE_PATH)) {
-      const data = readFileSync(MTIME_STORE_PATH, "utf-8");
-      const store: PersistedMtimeStore = JSON.parse(data);
-      if (store.version === 1 && store.mtimes) {
-        return new Map(Object.entries(store.mtimes));
-      }
-    }
-  } catch (err) {
-    console.error("[semantic-memory] Failed to load mtime store:", err);
-  }
-  return new Map();
-}
-
-export function saveMtimeStore(mtimes: Map<string, number>): void {
-  try {
-    ensureDir(MTIME_STORE_PATH);
-    const store: PersistedMtimeStore = {
-      version: 1,
-      mtimes: Object.fromEntries(mtimes),
-      lastSaved: Date.now(),
-    };
-    writeFileSync(MTIME_STORE_PATH, JSON.stringify(store));
-  } catch (err) {
-    console.error("[semantic-memory] Failed to save mtime store:", err);
-  }
-}
-
-// =============================================================================
 // Semantic Search Manager
 // =============================================================================
 
@@ -256,22 +164,183 @@ export interface SemanticSearchManager {
   close(): Promise<void>;
   getEntryCount(): number;
   hasEntry(id: string): boolean;
+  getEntry(id: string): VectorEntry | undefined;
+}
+
+/** Sidecar file schema: maps HNSW label (array index) → entry string ID */
+interface HnswMapFile {
+  version: 1;
+  dims: number;
+  ids: string[];
 }
 
 /**
  * Create a semantic search manager
- * Uses JSON file persistence for vector storage
+ * Vectors are kept in-memory; HNSW binary is persisted to disk after first build.
+ *
+ * @param chunkMetadata - Map of chunk ID → VectorEntry (metadata only, embeddings may be empty).
+ *   Used to reconstruct the metadata Map when loading HNSW from disk.
+ * @param hnswPathOrFn - Static path or lazy resolver for HNSW persistence.
  */
 export async function createSemanticSearchManager(
   config: SemanticMemoryConfig,
   embeddingProvider: EmbeddingProvider,
-  keywordSearchFn?: (query: string, limit: number) => Promise<HybridKeywordResult[]>
+  keywordSearchFn?: (query: string, limit: number) => Promise<HybridKeywordResult[]>,
+  chunkMetadata?: Map<string, VectorEntry>,
+  hnswPathOrFn?: string | (() => string | undefined),
 ): Promise<SemanticSearchManager> {
-  // Load persisted vectors
-  const vectors: VectorEntry[] = loadVectorStore();
-  const existingIds = new Set(vectors.map(v => v.id));
+  // HNSW index + metadata maps (replaces brute-force vectors[] array)
+  const metadata = new Map<bigint, VectorEntry>();   // label → full entry
+  const idToLabel = new Map<string, bigint>();        // string ID → numeric label
+  const existingIds = new Set<string>();
+  let nextLabel = 0n;
 
-  console.log(`[semantic-memory] Loaded ${vectors.length} vectors from persistent storage`);
+  /** Resolve the HNSW path (may be lazy) */
+  const resolveHnswPath = (): string | undefined =>
+    typeof hnswPathOrFn === 'function' ? hnswPathOrFn() : hnswPathOrFn;
+
+  // ── Save helper ──────────────────────────────────────────────────────
+  const saveIndex = (): void => {
+    const hnswPath = resolveHnswPath();
+    if (!hnswPath) return;
+    const mapPath = `${hnswPath}.map.json`;
+    try {
+      mkdirSync(dirname(hnswPath), { recursive: true });
+      index.save(hnswPath);
+
+      const ids: string[] = [];
+      for (let i = 0n; i < nextLabel; i++) {
+        const entry = metadata.get(i);
+        ids.push(entry?.id ?? "");
+      }
+      const map: HnswMapFile = { version: 1, dims: index.dimensions(), ids };
+      writeFileSync(mapPath, JSON.stringify(map));
+      log.info(`Saved HNSW index to disk: ${metadata.size} vectors, ${hnswPath}`);
+    } catch (err) {
+      log.warn(`Failed to save HNSW index: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  // ── Determine dimensions ─────────────────────────────────────────────
+  // Probe the current provider to get actual embedding dimensions
+  let dims = 1536; // fallback: OpenAI text-embedding-3-small
+  let savedDims: number | undefined;
+  {
+    const initPath = resolveHnswPath();
+    const initMapPath = initPath ? `${initPath}.map.json` : undefined;
+    if (initMapPath && existsSync(initMapPath)) {
+      try {
+        const saved = JSON.parse(readFileSync(initMapPath, "utf-8")) as HnswMapFile;
+        if (saved.dims) savedDims = saved.dims;
+      } catch { /* will fall through to rebuild */ }
+    }
+
+    // Probe provider for actual dims (short test string)
+    try {
+      const probe = await embeddingProvider.embedQuery("dimension probe");
+      if (probe.length > 0) dims = probe.length;
+    } catch {
+      // Provider may not be ready yet; fall back to saved dims
+      if (savedDims) dims = savedDims;
+    }
+
+    // Detect provider change (dimension mismatch with saved index)
+    if (savedDims && savedDims !== dims && initPath && initMapPath) {
+      log.warn(
+        `Dimension mismatch: saved=${savedDims}, current=${dims}. ` +
+        `Provider changed? Deleting old HNSW, will rebuild from events.`
+      );
+      try { unlinkSync(initPath); } catch {}
+      try { unlinkSync(initMapPath); } catch {}
+      savedDims = undefined; // Force fresh start
+    }
+  }
+
+  const index = new Index({
+    metric: MetricKind.Cos,
+    dimensions: dims,
+    connectivity: 16,
+    quantization: ScalarKind.F32,
+    expansion_add: 128,
+    expansion_search: 64,
+    multi: false,
+  });
+
+  // ── Try loading from disk ────────────────────────────────────────────
+  let loadedFromDisk = false;
+
+  {
+    const initPath = resolveHnswPath();
+    const initMapPath = initPath ? `${initPath}.map.json` : undefined;
+
+    if (initPath && initMapPath && existsSync(initPath) && existsSync(initMapPath)) {
+      try {
+        const saved = JSON.parse(readFileSync(initMapPath, "utf-8")) as HnswMapFile;
+
+        if (saved.version !== 1 || !Array.isArray(saved.ids)) {
+          throw new Error("incompatible map version");
+        }
+
+        index.load(initPath);
+
+        // Sanity check: saved labels should match index size
+        if (index.size() !== saved.ids.length) {
+          throw new Error(
+            `size mismatch: index=${index.size()}, map=${saved.ids.length}`
+          );
+        }
+
+        // Reconstruct metadata from saved label order + chunk metadata from SQLite
+        let matched = 0;
+        let orphaned = 0;
+        for (let i = 0; i < saved.ids.length; i++) {
+          const id = saved.ids[i];
+          if (!id) { orphaned++; continue; }
+          const label = BigInt(i);
+          const entry = chunkMetadata?.get(id);
+          if (entry) {
+            metadata.set(label, entry);
+            idToLabel.set(id, label);
+            existingIds.add(id);
+            matched++;
+          } else {
+            // Vector exists in HNSW but no metadata in SQLite — keep label slot
+            // so HNSW labels stay contiguous, but skip the entry
+            orphaned++;
+          }
+        }
+        nextLabel = BigInt(saved.ids.length);
+        loadedFromDisk = true;
+
+        log.info(
+          `Loaded HNSW from disk: ${matched} matched, ${orphaned} orphaned, ` +
+          `${index.size()}-node graph`
+        );
+      } catch (err) {
+        log.warn(
+          `Failed to load HNSW from disk, rebuilding: ${err instanceof Error ? err.message : err}`
+        );
+        // Reset state for full rebuild
+        metadata.clear();
+        idToLabel.clear();
+        existingIds.clear();
+        nextLabel = 0n;
+        loadedFromDisk = false;
+      }
+    }
+  }
+
+  // ── No HNSW on disk: start empty ────────────────────────────────────
+  // Vectors arrive via addEntry / addEntriesBatch (memory:filesChanged events).
+  // On a fresh install the HNSW will be built from those events and persisted.
+  if (!loadedFromDisk) {
+    log.info("No persisted HNSW found — starting with empty index. Vectors arrive via events.");
+  }
+
+  log.info(
+    `HNSW ready: dims=${index.dimensions()}, vectors=${metadata.size}, ` +
+    `connectivity=${index.connectivity()}, persisted=${!!resolveHnswPath()}`
+  );
 
   // Embedding cache
   const embeddingCache = new Map<string, number[]>();
@@ -317,15 +386,35 @@ export async function createSemanticSearchManager(
     queryEmbedding: number[],
     limit: number
   ): Promise<HybridVectorResult[]> => {
-    const scored = vectors.map((entry) => ({
-      ...entry,
-      vectorScore: cosineSimilarity(queryEmbedding, entry.embedding),
-    }));
+    if (metadata.size === 0) {
+      log.debug("vectorSearch called on empty index, returning []");
+      return [];
+    }
 
-    return scored
-      .sort((a, b) => b.vectorScore - a.vectorScore)
-      .slice(0, limit)
-      .map(({ embedding: _, ...rest }) => rest);
+    // Clamp limit to index size (usearch throws if k > size)
+    const k = Math.min(limit, metadata.size);
+    const t0 = performance.now();
+    const results = index.search(new Float32Array(queryEmbedding), k, 0);
+    const elapsed = (performance.now() - t0).toFixed(2);
+
+    const scored: HybridVectorResult[] = [];
+    for (let i = 0; i < results.keys.length; i++) {
+      const entry = metadata.get(results.keys[i]);
+      if (!entry) continue;
+      scored.push({
+        id: entry.id,
+        path: entry.path,
+        startLine: entry.startLine,
+        endLine: entry.endLine,
+        source: entry.source,
+        snippet: entry.snippet,
+        content: entry.content,
+        vectorScore: 1 - results.distances[i],  // cosine distance → similarity
+      });
+    }
+
+    log.debug(`HNSW search: k=${k}, returned=${scored.length}, took=${elapsed}ms`);
+    return scored;
   };
 
   return {
@@ -369,9 +458,13 @@ export async function createSemanticSearchManager(
       }
 
       const embedding = await getEmbedding(text);
-      vectors.push({ ...entry, embedding });
+      const full: VectorEntry = { ...entry, embedding };
+      const label = nextLabel++;
+      index.add(label, new Float32Array(embedding));
+      metadata.set(label, full);
+      idToLabel.set(entry.id, label);
       existingIds.add(entry.id);
-      scheduleSave();
+      log.debug(`Added entry id=${entry.id} as label=${label}, index size=${metadata.size}`);
     },
 
     async addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number> {
@@ -410,7 +503,7 @@ export async function createSemanticSearchManager(
         const batchEntries = newEntries.slice(batchStart, batchEnd);
         batchNum++;
 
-        console.log(`[semantic-memory] Embedding batch ${batchNum} (${batchTexts.length} chunks, ~${batchTokens} tokens)...`);
+        log.info(`Embedding batch ${batchNum}: ${batchTexts.length} chunks, ~${batchTokens} tokens`);
 
         // Retry with exponential backoff on rate limits
         let embeddings: number[][] = [];
@@ -427,7 +520,7 @@ export async function createSemanticSearchManager(
               // Extract wait time from error message if present
               const waitMatch = errMsg.match(/try again in (\d+\.?\d*)/i);
               const waitSecs = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 1 : Math.pow(2, retries) * 5;
-              console.log(`[semantic-memory] Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}...`);
+              log.warn(`Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}`);
               await new Promise(resolve => setTimeout(resolve, waitSecs * 1000));
               retries++;
             } else {
@@ -441,41 +534,44 @@ export async function createSemanticSearchManager(
 
         batchStart = batchEnd;
 
+        const t0 = performance.now();
         for (let j = 0; j < batchEntries.length; j++) {
           const { entry } = batchEntries[j];
           const embedding = embeddings[j] || [];
-
-          vectors.push({ ...entry, embedding });
+          const full: VectorEntry = { ...entry, embedding };
+          const label = nextLabel++;
+          index.add(label, new Float32Array(embedding));
+          metadata.set(label, full);
+          idToLabel.set(entry.id, label);
           existingIds.add(entry.id);
           addedCount++;
         }
+        const indexMs = (performance.now() - t0).toFixed(1);
+        log.info(`Batch ${batchNum} indexed ${batchEntries.length} vectors into HNSW in ${indexMs}ms`);
       }
 
-      if (addedCount > 0) {
-        scheduleSave();
-      }
-
+      log.info(`addEntriesBatch complete: ${addedCount} added, index size=${metadata.size}`);
+      if (addedCount > 0) saveIndex();
       return addedCount;
     },
 
     async close(): Promise<void> {
-      // Force save on close
-      if (saveTimeout) {
-        clearTimeout(saveTimeout);
-      }
-      if (dirty || vectors.length > 0) {
-        saveVectorStore(vectors);
-        console.log(`[semantic-memory] Final save: ${vectors.length} vectors`);
-      }
+      saveIndex();
       embeddingCache.clear();
+      log.info(`Closed: saved index, cleared cache, final size=${metadata.size}`);
     },
 
     getEntryCount(): number {
-      return vectors.length;
+      return metadata.size;
     },
 
     hasEntry(id: string): boolean {
       return existingIds.has(id);
+    },
+
+    getEntry(id: string): VectorEntry | undefined {
+      const label = idToLabel.get(id);
+      return label !== undefined ? metadata.get(label) : undefined;
     },
   };
 }

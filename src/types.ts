@@ -4,7 +4,7 @@
 
 export interface SemanticMemoryConfig {
   // Embedding provider
-  provider: "openai" | "gemini" | "local" | "auto";
+  provider: "openai" | "gemini" | "local" | "ollama" | "auto";
   model: string;
 
   // API configuration
@@ -15,6 +15,12 @@ export interface SemanticMemoryConfig {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+  };
+
+  // Ollama config
+  ollama?: {
+    baseUrl?: string;   // default: http://ollama:11434 (Docker) or http://localhost:11434
+    model?: string;     // default: qwen3-embedding:0.6b
   };
 
   // Search configuration
@@ -62,6 +68,10 @@ export interface SemanticMemoryConfig {
   chunking: {
     tokens: number;
     overlap: number;
+    multiScale?: {
+      enabled: boolean;
+      scales: Array<{ tokens: number; overlap: number }>;
+    };
   };
 }
 
@@ -99,6 +109,14 @@ export const DEFAULT_CONFIG: SemanticMemoryConfig = {
   chunking: {
     tokens: 512,
     overlap: 64,
+    multiScale: {
+      enabled: true,
+      scales: [
+        { tokens: 512, overlap: 64 },
+        { tokens: 2048, overlap: 256 },
+        { tokens: 4096, overlap: 512 },
+      ],
+    },
   },
 };
 

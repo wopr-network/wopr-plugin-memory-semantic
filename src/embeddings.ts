@@ -218,6 +218,58 @@ export async function createLocalEmbeddingProvider(
 }
 
 // =============================================================================
+// Ollama Embeddings
+// =============================================================================
+
+export async function createOllamaEmbeddingProvider(
+  config: SemanticMemoryConfig
+): Promise<EmbeddingProvider> {
+  const baseUrl = (
+    config.ollama?.baseUrl ||
+    config.baseUrl ||
+    process.env.OLLAMA_HOST ||
+    "http://ollama:11434"
+  ).replace(/\/$/, "");
+  const model = config.ollama?.model || config.model || "qwen3-embedding:0.6b";
+
+  // Verify Ollama is reachable
+  const healthRes = await fetch(`${baseUrl}/api/tags`).catch(() => null);
+  if (!healthRes?.ok) {
+    throw new Error(`Ollama not reachable at ${baseUrl}`);
+  }
+
+  return {
+    id: "ollama",
+    model,
+    embedQuery: async (text) => {
+      const res = await fetch(`${baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: text }),
+      });
+      if (!res.ok) {
+        throw new Error(`Ollama embed failed: ${res.status} ${await res.text()}`);
+      }
+      const data = (await res.json()) as { embeddings: number[][] };
+      return data.embeddings[0];
+    },
+    embedBatch: async (texts) => {
+      // Ollama /api/embed accepts input as string[] natively
+      const res = await fetch(`${baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: texts }),
+      });
+      if (!res.ok) {
+        throw new Error(`Ollama batch embed failed: ${res.status} ${await res.text()}`);
+      }
+      const data = (await res.json()) as { embeddings: number[][] };
+      return data.embeddings;
+    },
+  };
+}
+
+// =============================================================================
 // Provider Factory
 // =============================================================================
 
@@ -234,11 +286,15 @@ export async function createEmbeddingProvider(
     return createGeminiEmbeddingProvider(config);
   }
 
+  if (provider === "ollama") {
+    return createOllamaEmbeddingProvider(config);
+  }
+
   if (provider === "local") {
     return createLocalEmbeddingProvider(config);
   }
 
-  // Auto: try OpenAI first, then Gemini, then local
+  // Auto: try OpenAI → Gemini → Ollama → local
   const errors: string[] = [];
 
   try {
@@ -251,6 +307,12 @@ export async function createEmbeddingProvider(
     return await createGeminiEmbeddingProvider(config);
   } catch (err) {
     errors.push(`Gemini: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    return await createOllamaEmbeddingProvider(config);
+  } catch (err) {
+    errors.push(`Ollama: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   try {
