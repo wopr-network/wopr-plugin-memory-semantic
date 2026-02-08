@@ -9,8 +9,6 @@ import { dirname } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
 import winston from "winston";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
-import { dirname } from "path";
 
 const log = winston.createLogger({
   level: "debug",
@@ -366,22 +364,11 @@ export async function createSemanticSearchManager(
   // Embedding cache
   const embeddingCache = new Map<string, number[]>();
 
-  // Track if we need to save
-  let dirty = false;
-  let saveTimeout: NodeJS.Timeout | null = null;
-
   // Debounced save - wait 5 seconds after last change before saving
+  let saveTimeout: NodeJS.Timeout | null = null;
   const scheduleSave = () => {
-    dirty = true;
-    if (saveTimeout) {
-      clearTimeout(saveTimeout);
-    }
-    saveTimeout = setTimeout(() => {
-      if (dirty) {
-        saveVectorStore(vectors);
-        dirty = false;
-      }
-    }, 5000);
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => saveIndex(), 5000);
   };
 
   const getEmbedding = async (text: string): Promise<number[]> => {
@@ -473,15 +460,26 @@ export async function createSemanticSearchManager(
     },
 
     async addEntry(entry: Omit<VectorEntry, "embedding">, text: string): Promise<void> {
-      // Skip if already indexed
+      // Skip if already indexed (re-check after await since concurrent callers may have added it)
       if (existingIds.has(entry.id)) {
         return;
       }
 
       const embedding = await getEmbedding(text);
+
+      // Re-check after await — another caller may have indexed this ID while we were embedding
+      if (existingIds.has(entry.id)) {
+        return;
+      }
+
       const full: VectorEntry = { ...entry, embedding };
       const label = nextLabel++;
-      index.add(label, new Float32Array(embedding));
+      try {
+        index.add(label, new Float32Array(embedding));
+      } catch (err: any) {
+        log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
+        return;
+      }
       metadata.set(label, full);
       idToLabel.set(entry.id, label);
       existingIds.add(entry.id);
@@ -489,8 +487,13 @@ export async function createSemanticSearchManager(
     },
 
     async addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number> {
-      // Filter out already indexed entries
-      const newEntries = entries.filter(e => !existingIds.has(e.entry.id));
+      // Filter out already indexed entries AND deduplicate within batch
+      const seenInBatch = new Set<string>();
+      const newEntries = entries.filter(e => {
+        if (existingIds.has(e.entry.id) || seenInBatch.has(e.entry.id)) return false;
+        seenInBatch.add(e.entry.id);
+        return true;
+      });
       if (newEntries.length === 0) return 0;
 
       // Truncate texts to stay under token limit (~4000 chars = ~1000 tokens, safe under 8192)
@@ -567,9 +570,16 @@ export async function createSemanticSearchManager(
             log.warn(`Skipping entry ${entry.id}: expected ${dims}-dim embedding, got ${embedding?.length ?? 0}`);
             continue;
           }
+          // Re-check after await — concurrent caller may have added this ID
+          if (existingIds.has(entry.id)) continue;
           const full: VectorEntry = { ...entry, embedding };
           const label = nextLabel++;
-          index.add(label, new Float32Array(embedding));
+          try {
+            index.add(label, new Float32Array(embedding));
+          } catch (err: any) {
+            log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
+            continue;
+          }
           metadata.set(label, full);
           idToLabel.set(entry.id, label);
           existingIds.add(entry.id);

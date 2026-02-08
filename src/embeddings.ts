@@ -230,7 +230,7 @@ export async function createOllamaEmbeddingProvider(
     process.env.OLLAMA_HOST ||
     "http://ollama:11434"
   ).replace(/\/$/, "");
-  const model = config.ollama?.model || config.model || "qwen3-embedding:0.6b";
+  const model = config.ollama?.model || config.model || "qwen3-embedding:8b";
 
   // Verify Ollama is reachable
   const healthRes = await fetch(`${baseUrl}/api/tags`).catch(() => null);
