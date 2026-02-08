@@ -13,9 +13,9 @@
 import type { SemanticMemoryConfig, EmbeddingProvider, MemorySearchResult } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import { createEmbeddingProvider } from "./embeddings.js";
-import { createSemanticSearchManager, type SemanticSearchManager, loadMtimeStore, saveMtimeStore } from "./search.js";
-import { performAutoRecall, injectMemoriesIntoMessages } from "./recall.js";
-import { shouldCapture, extractCaptureCandidate, extractFromConversation } from "./capture.js";
+import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
+import { performAutoRecall } from "./recall.js";
+import { extractFromConversation } from "./capture.js";
 import { createHash } from "crypto";
 import winston from "winston";
 
@@ -32,7 +32,7 @@ const log = winston.createLogger({
 
 // Generate deterministic ID from content to avoid duplicates
 function contentHash(text: string): string {
-  return createHash('md5').update(text).digest('hex').slice(0, 12);
+  return createHash('sha256').update(text).digest('hex').slice(0, 24);
 }
 
 // =============================================================================
@@ -161,16 +161,18 @@ async function loadChunkMetadata(api: WoprPluginApi): Promise<Map<string, import
     );
     for (const row of stmt.iterate()) {
       const r = row as any;
-      entries.set(r.id, {
+      const text = typeof r.text === 'string' ? r.text : '';
+      const entry: import("./search.js").VectorEntry = {
         id: r.id,
         path: r.path,
         startLine: r.start_line,
         endLine: r.end_line,
         source: r.source,
-        snippet: typeof r.text === 'string' ? r.text.slice(0, 500) : '',
-        content: typeof r.text === 'string' ? r.text : '',
+        snippet: text.slice(0, 500),
+        content: text,
         embedding: [], // placeholder — real vectors live in HNSW index
-      });
+      };
+      entries.set(r.id, entry);
     }
     log.info(`Loaded ${entries.size} chunk metadata rows from SQLite`);
   } catch (err) {
@@ -204,6 +206,7 @@ function storeEmbeddingsToDb(
 ): void {
   const db = getDb(api);
   if (!db || embeddings.length === 0) return;
+  ensureEmbeddingColumn(db);
 
   db.exec("BEGIN");
   try {
@@ -527,7 +530,9 @@ function multiScaleChunk(
   const results: PendingEntry[] = [];
   for (const scale of scales) {
     const maxChars = scale.tokens * 4;
-    const overlapChars = scale.overlap * 4;
+    let overlapChars = scale.overlap * 4;
+    // Clamp overlap to prevent infinite loop if misconfigured
+    if (overlapChars >= maxChars) overlapChars = Math.max(0, maxChars - 4);
     if (text.length <= maxChars) {
       // Text fits in one chunk at this scale
       results.push({
@@ -606,6 +611,8 @@ const plugin: SemanticMemoryPlugin = {
     await initialize(api, mergedConfig);
 
     // Register hooks via the event bus
+    // Note: WoprPluginApi.on() does not return cleanup functions.
+    // Event handler cleanup on re-init is managed by the core event bus.
     api.events.on("session:beforeInject", (payload: any) => handleBeforeInject(api, payload));
     api.events.on("session:afterInject", (payload: any) => handleAfterInject(api, payload));
 
@@ -625,10 +632,7 @@ const plugin: SemanticMemoryPlugin = {
 
         for (const chunk of change.chunks) {
           if (!chunk.text || chunk.text.trim().length < 10) continue;
-          // Use content hash instead of core's UUID — core reassigns UUIDs when
-          // it re-chunks a file, but unchanged text should keep the same ID so
-          // we don't re-embed entire conversations on every new message.
-          const id = `ch-${contentHash(chunk.text)}`;
+          const id = chunk.id;
 
           if (ms?.enabled && ms.scales.length > 0) {
             // Multi-scale: produce vectors at each granularity
@@ -744,7 +748,6 @@ const plugin: SemanticMemoryPlugin = {
       throw new Error("Semantic memory not initialized");
     }
 
-    const candidate = extractCaptureCandidate(text);
     const id = `man-${contentHash(text)}`;
 
     await state.searchManager.addEntry(

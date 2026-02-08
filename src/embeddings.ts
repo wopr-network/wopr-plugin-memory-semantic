@@ -250,7 +250,10 @@ export async function createOllamaEmbeddingProvider(
       if (!res.ok) {
         throw new Error(`Ollama embed failed: ${res.status} ${await res.text()}`);
       }
-      const data = (await res.json()) as { embeddings: number[][] };
+      const data = (await res.json()) as { embeddings?: number[][] };
+      if (!data.embeddings || !Array.isArray(data.embeddings) || data.embeddings.length === 0) {
+        throw new Error(`Ollama returned empty embeddings for model ${model}`);
+      }
       return data.embeddings[0];
     },
     embedBatch: async (texts) => {
@@ -263,7 +266,13 @@ export async function createOllamaEmbeddingProvider(
       if (!res.ok) {
         throw new Error(`Ollama batch embed failed: ${res.status} ${await res.text()}`);
       }
-      const data = (await res.json()) as { embeddings: number[][] };
+      const data = (await res.json()) as { embeddings?: number[][] };
+      if (!data.embeddings || !Array.isArray(data.embeddings)) {
+        throw new Error(`Ollama returned invalid embeddings response for model ${model}`);
+      }
+      if (data.embeddings.length !== texts.length) {
+        throw new Error(`Ollama embedding count mismatch: expected ${texts.length}, got ${data.embeddings.length}`);
+      }
       return data.embeddings;
     },
   };

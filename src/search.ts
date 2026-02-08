@@ -4,6 +4,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
 import winston from "winston";
@@ -167,11 +168,19 @@ export interface SemanticSearchManager {
   getEntry(id: string): VectorEntry | undefined;
 }
 
-/** Sidecar file schema: maps HNSW label (array index) → entry string ID */
+/** Sidecar file: maps HNSW label (array index) → full entry metadata.
+ *  Self-contained — no SQLite needed for reconstruction on load. */
+interface HnswMapEntryMeta {
+  id: string;
+  path: string;
+  source: string;
+  snippet: string;
+  content: string;
+}
+
 interface HnswMapFile {
-  version: 1;
   dims: number;
-  ids: string[];
+  entries: (HnswMapEntryMeta | null)[];
 }
 
 /**
@@ -208,12 +217,22 @@ export async function createSemanticSearchManager(
       mkdirSync(dirname(hnswPath), { recursive: true });
       index.save(hnswPath);
 
-      const ids: string[] = [];
+      const entries: (HnswMapEntryMeta | null)[] = [];
       for (let i = 0n; i < nextLabel; i++) {
         const entry = metadata.get(i);
-        ids.push(entry?.id ?? "");
+        if (entry) {
+          entries.push({
+            id: entry.id,
+            path: entry.path,
+            source: entry.source,
+            snippet: entry.snippet,
+            content: entry.content,
+          });
+        } else {
+          entries.push(null);
+        }
       }
-      const map: HnswMapFile = { version: 1, dims: index.dimensions(), ids };
+      const map: HnswMapFile = { dims: index.dimensions(), entries };
       writeFileSync(mapPath, JSON.stringify(map));
       log.info(`Saved HNSW index to disk: ${metadata.size} vectors, ${hnswPath}`);
     } catch (err) {
@@ -275,41 +294,41 @@ export async function createSemanticSearchManager(
 
     if (initPath && initMapPath && existsSync(initPath) && existsSync(initMapPath)) {
       try {
-        const saved = JSON.parse(readFileSync(initMapPath, "utf-8")) as HnswMapFile;
+        const saved = JSON.parse(readFileSync(initMapPath, "utf-8"));
 
-        if (saved.version !== 1 || !Array.isArray(saved.ids)) {
-          throw new Error("incompatible map version");
+        // Must have entries array — old format (ids-only) gets nuked
+        if (!Array.isArray(saved.entries)) {
+          throw new Error("old map format (no entries), deleting and rebuilding");
         }
 
         index.load(initPath);
 
-        // Sanity check: saved labels should match index size
-        if (index.size() !== saved.ids.length) {
-          throw new Error(
-            `size mismatch: index=${index.size()}, map=${saved.ids.length}`
-          );
+        const map = saved as HnswMapFile;
+        if (index.size() !== map.entries.length) {
+          throw new Error(`size mismatch: index=${index.size()}, map=${map.entries.length}`);
         }
 
-        // Reconstruct metadata from saved label order + chunk metadata from SQLite
         let matched = 0;
         let orphaned = 0;
-        for (let i = 0; i < saved.ids.length; i++) {
-          const id = saved.ids[i];
-          if (!id) { orphaned++; continue; }
+        for (let i = 0; i < map.entries.length; i++) {
+          const e = map.entries[i];
+          if (!e) { orphaned++; continue; }
           const label = BigInt(i);
-          const entry = chunkMetadata?.get(id);
-          if (entry) {
-            metadata.set(label, entry);
-            idToLabel.set(id, label);
-            existingIds.add(id);
-            matched++;
-          } else {
-            // Vector exists in HNSW but no metadata in SQLite — keep label slot
-            // so HNSW labels stay contiguous, but skip the entry
-            orphaned++;
-          }
+          metadata.set(label, {
+            id: e.id,
+            path: e.path,
+            startLine: 0,
+            endLine: 0,
+            source: e.source,
+            snippet: e.snippet,
+            content: e.content,
+            embedding: [],
+          });
+          idToLabel.set(e.id, label);
+          existingIds.add(e.id);
+          matched++;
         }
-        nextLabel = BigInt(saved.ids.length);
+        nextLabel = BigInt(map.entries.length);
         loadedFromDisk = true;
 
         log.info(
@@ -320,7 +339,9 @@ export async function createSemanticSearchManager(
         log.warn(
           `Failed to load HNSW from disk, rebuilding: ${err instanceof Error ? err.message : err}`
         );
-        // Reset state for full rebuild
+        // Delete stale files so we start clean
+        try { unlinkSync(initPath); } catch {}
+        try { unlinkSync(initMapPath); } catch {}
         metadata.clear();
         idToLabel.clear();
         existingIds.clear();
@@ -367,7 +388,7 @@ export async function createSemanticSearchManager(
     // Truncate text to ~4000 chars to stay safely under 8192 token limit
     const truncatedText = text.length > 4000 ? text.slice(0, 4000) : text;
 
-    const cacheKey = truncatedText.slice(0, 200);
+    const cacheKey = createHash('sha256').update(truncatedText).digest('hex').slice(0, 24);
     const cached = embeddingCache.get(cacheKey);
     if (cached) return cached;
 
@@ -532,12 +553,20 @@ export async function createSemanticSearchManager(
           throw new Error(`Failed after ${maxRetries} rate limit retries`);
         }
 
+        if (embeddings.length !== batchEntries.length) {
+          log.warn(`Embedding batch size mismatch: expected ${batchEntries.length}, got ${embeddings.length}`);
+        }
+
         batchStart = batchEnd;
 
         const t0 = performance.now();
         for (let j = 0; j < batchEntries.length; j++) {
           const { entry } = batchEntries[j];
-          const embedding = embeddings[j] || [];
+          const embedding = embeddings[j];
+          if (!embedding || embedding.length !== dims) {
+            log.warn(`Skipping entry ${entry.id}: expected ${dims}-dim embedding, got ${embedding?.length ?? 0}`);
+            continue;
+          }
           const full: VectorEntry = { ...entry, embedding };
           const label = nextLabel++;
           index.add(label, new Float32Array(embedding));
