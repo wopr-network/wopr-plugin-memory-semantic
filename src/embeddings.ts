@@ -218,6 +218,73 @@ export async function createLocalEmbeddingProvider(
 }
 
 // =============================================================================
+// Ollama Embeddings
+// =============================================================================
+
+export async function createOllamaEmbeddingProvider(
+  config: SemanticMemoryConfig
+): Promise<EmbeddingProvider> {
+  const baseUrl = (
+    config.ollama?.baseUrl ||
+    process.env.OLLAMA_HOST ||
+    "http://ollama:11434"
+  ).replace(/\/$/, "");
+  const model = config.ollama?.model || "qwen3-embedding:8b";
+
+  // Verify Ollama is reachable
+  const healthRes = await fetch(`${baseUrl}/api/tags`, {
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => null);
+  if (!healthRes?.ok) {
+    throw new Error(`Ollama not reachable`);
+  }
+
+  return {
+    id: "ollama",
+    model,
+    embedQuery: async (text) => {
+      if (!text || !text.trim()) return [];
+
+      const res = await fetch(`${baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: text }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!res.ok) {
+        throw new Error(`Ollama embed failed (status ${res.status})`);
+      }
+      const data = (await res.json()) as { embeddings?: number[][] };
+      if (!data.embeddings || !Array.isArray(data.embeddings) || data.embeddings.length === 0) {
+        throw new Error(`Ollama returned empty embeddings`);
+      }
+      return sanitizeAndNormalizeEmbedding(data.embeddings[0]);
+    },
+    embedBatch: async (texts) => {
+      if (texts.length === 0) return [];
+      // Ollama /api/embed accepts input as string[] natively
+      const res = await fetch(`${baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: texts }),
+        signal: AbortSignal.timeout(300_000),
+      });
+      if (!res.ok) {
+        throw new Error(`Ollama batch embed failed (status ${res.status})`);
+      }
+      const data = (await res.json()) as { embeddings?: number[][] };
+      if (!data.embeddings || !Array.isArray(data.embeddings)) {
+        throw new Error(`Ollama returned invalid embeddings response`);
+      }
+      if (data.embeddings.length !== texts.length) {
+        throw new Error(`Ollama embedding count mismatch: expected ${texts.length}, got ${data.embeddings.length}`);
+      }
+      return data.embeddings.map(sanitizeAndNormalizeEmbedding);
+    },
+  };
+}
+
+// =============================================================================
 // Provider Factory
 // =============================================================================
 
@@ -234,11 +301,15 @@ export async function createEmbeddingProvider(
     return createGeminiEmbeddingProvider(config);
   }
 
+  if (provider === "ollama") {
+    return createOllamaEmbeddingProvider(config);
+  }
+
   if (provider === "local") {
     return createLocalEmbeddingProvider(config);
   }
 
-  // Auto: try OpenAI first, then Gemini, then local
+  // Auto: try OpenAI → Gemini → Ollama → local
   const errors: string[] = [];
 
   try {
@@ -251,6 +322,12 @@ export async function createEmbeddingProvider(
     return await createGeminiEmbeddingProvider(config);
   } catch (err) {
     errors.push(`Gemini: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    return await createOllamaEmbeddingProvider(config);
+  } catch (err) {
+    errors.push(`Ollama: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   try {
