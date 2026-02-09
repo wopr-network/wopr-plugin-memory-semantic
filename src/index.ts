@@ -32,7 +32,7 @@ const log = winston.createLogger({
 
 // Generate deterministic ID from content to avoid duplicates
 function contentHash(text: string): string {
-  return createHash('sha256').update(text).digest('hex').slice(0, 24);
+  return createHash('sha256').update(text).digest('hex');
 }
 
 // =============================================================================
@@ -48,6 +48,7 @@ interface PluginState {
   indexedFiles: Map<string, number>; // path -> mtime for incremental indexing
   lastIncrementalIndex: number; // timestamp of last incremental check
   startupIndexingComplete: boolean; // flag to skip incremental until startup done
+  eventCleanup: Array<() => void>; // event bus unsubscribe functions
 }
 
 const state: PluginState = {
@@ -59,6 +60,7 @@ const state: PluginState = {
   indexedFiles: new Map(),
   lastIncrementalIndex: 0,
   startupIndexingComplete: false,
+  eventCleanup: [],
 };
 
 // =============================================================================
@@ -123,7 +125,9 @@ function ensureEmbeddingColumn(db: any): void {
     if (!cols.some((c: any) => c.name === 'embedding')) {
       db.exec(`ALTER TABLE chunks ADD COLUMN embedding BLOB`);
     }
-  } catch {}
+  } catch (err) {
+    log.warn(`ensureEmbeddingColumn failed: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 /** Open a read-only DB handle — tries core extension first, falls back to direct file open. */
@@ -242,7 +246,9 @@ function persistNewEntryToDb(api: WoprPluginApi, id: string): void {
       entry.id, entry.path, entry.source, entry.startLine, entry.endLine,
       contentHash(entry.content), state.embeddingProvider.id, entry.content, Date.now(), blob
     );
-  } catch {}
+  } catch (err) {
+    log.warn(`persistNewEntryToDb failed for ${id}: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 // =============================================================================
@@ -460,12 +466,13 @@ async function handleAfterInject(
     };
 
     // REAL-TIME INDEXING: Index session content immediately with full text
+    // Include session name in hash to prevent cross-session collisions
     if (payload.message && payload.message.trim().length > 10) {
-      await indexText(payload.message, `rt-${contentHash(payload.message)}`, "realtime-user");
+      await indexText(payload.message, `rt-${contentHash(`${sessionName}:user:${payload.message}`)}`, "realtime-user");
     }
 
     if (payload.response.trim().length > 10) {
-      await indexText(payload.response, `rt-${contentHash(payload.response)}`, "realtime-assistant");
+      await indexText(payload.response, `rt-${contentHash(`${sessionName}:assistant:${payload.response}`)}`, "realtime-assistant");
     }
 
     if (indexedCount > 0) {
@@ -610,14 +617,12 @@ const plugin: SemanticMemoryPlugin = {
     const mergedConfig = { ...storedConfig, ...config };
     await initialize(api, mergedConfig);
 
-    // Register hooks via the event bus
-    // Note: WoprPluginApi.on() does not return cleanup functions.
-    // Event handler cleanup on re-init is managed by the core event bus.
-    api.events.on("session:beforeInject", (payload: any) => handleBeforeInject(api, payload));
-    api.events.on("session:afterInject", (payload: any) => handleAfterInject(api, payload));
+    // Register hooks via the event bus — store cleanup functions for shutdown
+    const unsubBeforeInject = api.events.on("session:beforeInject", (payload: any) => handleBeforeInject(api, payload));
+    const unsubAfterInject = api.events.on("session:afterInject", (payload: any) => handleAfterInject(api, payload));
 
     // Subscribe to core's file change events for vector indexing
-    api.events.on("memory:filesChanged", async (payload: any) => {
+    const unsubFilesChanged = api.events.on("memory:filesChanged", async (payload: any) => {
       const heapMB = () => Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
       log.info(`filesChanged handler start (heap=${heapMB()}MB)`);
       if (!state.initialized || !state.searchManager) return;
@@ -698,7 +703,7 @@ const plugin: SemanticMemoryPlugin = {
     });
 
     // Hook into memory_search to provide semantic results
-    api.events.on("memory:search", async (payload: {
+    const unsubSearch = api.events.on("memory:search", async (payload: {
       query: string;
       maxResults: number;
       minScore: number;
@@ -723,10 +728,17 @@ const plugin: SemanticMemoryPlugin = {
       }
     });
 
+    state.eventCleanup = [unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch];
     api.log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 
   async shutdown() {
+    // Unsubscribe all event handlers
+    for (const unsub of state.eventCleanup) {
+      try { unsub(); } catch {}
+    }
+    state.eventCleanup = [];
+
     if (state.searchManager) {
       await state.searchManager.close();
       state.searchManager = null;

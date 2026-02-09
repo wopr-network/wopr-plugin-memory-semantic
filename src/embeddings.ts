@@ -246,6 +246,7 @@ export async function createOllamaEmbeddingProvider(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, input: text }),
+        signal: AbortSignal.timeout(120_000),
       });
       if (!res.ok) {
         throw new Error(`Ollama embed failed: ${res.status} ${await res.text()}`);
@@ -257,11 +258,13 @@ export async function createOllamaEmbeddingProvider(
       return data.embeddings[0];
     },
     embedBatch: async (texts) => {
+      if (texts.length === 0) return [];
       // Ollama /api/embed accepts input as string[] natively
       const res = await fetch(`${baseUrl}/api/embed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, input: texts }),
+        signal: AbortSignal.timeout(300_000),
       });
       if (!res.ok) {
         throw new Error(`Ollama batch embed failed: ${res.status} ${await res.text()}`);

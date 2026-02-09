@@ -171,6 +171,8 @@ export interface SemanticSearchManager {
 interface HnswMapEntryMeta {
   id: string;
   path: string;
+  startLine: number;
+  endLine: number;
   source: string;
   snippet: string;
   content: string;
@@ -222,6 +224,8 @@ export async function createSemanticSearchManager(
           entries.push({
             id: entry.id,
             path: entry.path,
+            startLine: entry.startLine,
+            endLine: entry.endLine,
             source: entry.source,
             snippet: entry.snippet,
             content: entry.content,
@@ -315,8 +319,8 @@ export async function createSemanticSearchManager(
           metadata.set(label, {
             id: e.id,
             path: e.path,
-            startLine: 0,
-            endLine: 0,
+            startLine: e.startLine ?? 0,
+            endLine: e.endLine ?? 0,
             source: e.source,
             snippet: e.snippet,
             content: e.content,
@@ -375,7 +379,7 @@ export async function createSemanticSearchManager(
     // Truncate text to ~4000 chars to stay safely under 8192 token limit
     const truncatedText = text.length > 4000 ? text.slice(0, 4000) : text;
 
-    const cacheKey = createHash('sha256').update(truncatedText).digest('hex').slice(0, 24);
+    const cacheKey = createHash('sha256').update(truncatedText).digest('hex');
     const cached = embeddingCache.get(cacheKey);
     if (cached) return cached;
 
@@ -484,6 +488,7 @@ export async function createSemanticSearchManager(
       idToLabel.set(entry.id, label);
       existingIds.add(entry.id);
       log.debug(`Added entry id=${entry.id} as label=${label}, index size=${metadata.size}`);
+      scheduleSave();
     },
 
     async addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number> {
