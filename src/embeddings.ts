@@ -267,7 +267,7 @@ export async function createOllamaEmbeddingProvider(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, input: texts }),
-        signal: AbortSignal.timeout(300_000),
+        signal: AbortSignal.timeout(600_000),
       });
       if (!res.ok) {
         throw new Error(`Ollama batch embed failed (status ${res.status})`);

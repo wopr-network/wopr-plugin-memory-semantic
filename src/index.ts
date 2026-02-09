@@ -17,7 +17,10 @@ import { createSemanticSearchManager, type SemanticSearchManager } from "./searc
 import { performAutoRecall } from "./recall.js";
 import { extractFromConversation } from "./capture.js";
 import { createHash } from "crypto";
+import { join } from "path";
 import winston from "winston";
+
+const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
 
 const log = winston.createLogger({
   level: "debug",
@@ -26,7 +29,11 @@ const log = winston.createLogger({
     winston.format.json(),
   ),
   defaultMeta: { service: "semantic-memory" },
-  transports: [new winston.transports.Console()],
+  transports: [
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
+    new winston.transports.Console({ level: "warn" }),
+  ],
 });
 
 // Generate deterministic ID from content to avoid duplicates
@@ -98,6 +105,7 @@ interface WoprPluginApi {
   // Logging
   log: {
     info(msg: string): void;
+    warn(msg: string): void;
     error(msg: string): void;
     debug(msg: string): void;
   };
@@ -638,6 +646,13 @@ const plugin: SemanticMemoryPlugin = {
   version: "1.0.0",
 
   async init(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>) {
+    // Override api.log to use our file-backed winston logger
+    api.log = {
+      info: (msg: string) => log.info(msg),
+      warn: (msg: string) => log.warn(msg),
+      error: (msg: string) => log.error(msg),
+      debug: (msg: string) => log.debug(msg),
+    };
     api.log.info("[semantic-memory] init() called");
 
     // Clean up previous subscriptions if re-initialized

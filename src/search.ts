@@ -5,10 +5,12 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
 import winston from "winston";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
+
+const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
 
 const log = winston.createLogger({
   level: "debug",
@@ -17,7 +19,11 @@ const log = winston.createLogger({
     winston.format.json(),
   ),
   defaultMeta: { service: "semantic-search" },
-  transports: [new winston.transports.Console()],
+  transports: [
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
+    new winston.transports.Console({ level: "warn" }),
+  ],
 });
 
 // =============================================================================
@@ -279,13 +285,14 @@ export async function createSemanticSearchManager(
     }
 
     // Detect provider change (dimension mismatch with saved index)
-    if (savedDims && savedDims !== dims && initPath && initMapPath) {
+    const hasSavedIndex = initPath && initMapPath && existsSync(initPath);
+    if (hasSavedIndex && (savedDims === undefined || savedDims !== dims)) {
       log.warn(
-        `Dimension mismatch: saved=${savedDims}, current=${dims}. ` +
-        `Provider changed? Deleting old HNSW, will rebuild from events.`
+        `Dimension mismatch or unknown saved dims: saved=${savedDims ?? "none"}, current=${dims}. ` +
+        `Deleting old HNSW, will rebuild from events.`
       );
-      try { unlinkSync(initPath); } catch {}
-      try { unlinkSync(initMapPath); } catch {}
+      try { unlinkSync(initPath!); } catch {}
+      try { unlinkSync(initMapPath!); } catch {}
       savedDims = undefined; // Force fresh start
     }
   }
@@ -317,6 +324,13 @@ export async function createSemanticSearchManager(
         }
 
         index.load(initPath);
+
+        // Validate loaded index dimensions match current provider
+        if (index.dimensions() !== dims) {
+          throw new Error(
+            `dimension mismatch: loaded=${index.dimensions()}, expected=${dims}. Provider changed.`
+          );
+        }
 
         const map = saved as HnswMapFile;
         if (index.size() !== map.entries.length) {
@@ -521,8 +535,9 @@ export async function createSemanticSearchManager(
 
       const texts = newEntries.map(e => e.text);
 
-      // OpenAI limit: 300,000 tokens per request, ~4 chars per token
-      const MAX_TOKENS_PER_REQUEST = 280000; // Leave margin below 300k
+      // Local models (ollama/local) are much slower than cloud APIs — use smaller batches
+      const isLocal = embeddingProvider.id === "ollama" || embeddingProvider.id === "local";
+      const MAX_TOKENS_PER_REQUEST = isLocal ? 8000 : 280000;
       const CHARS_PER_TOKEN = 4;
       let addedCount = 0;
 
