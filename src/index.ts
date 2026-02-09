@@ -10,24 +10,21 @@
  * - Auto-capture: extract and store important information from conversations
  */
 
-import type { SemanticMemoryConfig, EmbeddingProvider, MemorySearchResult } from "./types.js";
-import { DEFAULT_CONFIG } from "./types.js";
-import { createEmbeddingProvider } from "./embeddings.js";
-import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
-import { performAutoRecall } from "./recall.js";
-import { extractFromConversation } from "./capture.js";
-import { createHash } from "crypto";
-import { join } from "path";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import winston from "winston";
+import { extractFromConversation } from "./capture.js";
+import { createEmbeddingProvider } from "./embeddings.js";
+import { performAutoRecall } from "./recall.js";
+import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
+import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
+import { DEFAULT_CONFIG } from "./types.js";
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
 
 const log = winston.createLogger({
   level: "debug",
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json(),
-  ),
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
   defaultMeta: { service: "semantic-memory" },
   transports: [
     new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
@@ -38,8 +35,102 @@ const log = winston.createLogger({
 
 // Generate deterministic ID from content to avoid duplicates
 function contentHash(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
+  return createHash("sha256").update(text).digest("hex");
 }
+
+// =============================================================================
+// Plugin State
+// =============================================================================
+
+// =============================================================================
+// Embedding Queue — serializes all embedding work through a single channel
+// =============================================================================
+
+class EmbeddingQueue {
+  private queue: PendingEntry[] = [];
+  private processing = false;
+  private _bootstrapping = false;
+  private searchManager: SemanticSearchManager | null = null;
+
+  get bootstrapping(): boolean { return this._bootstrapping; }
+
+  attach(sm: SemanticSearchManager): void {
+    this.searchManager = sm;
+  }
+
+  /** Enqueue entries and start processing if idle. Returns immediately. */
+  enqueue(entries: PendingEntry[], source: string): void {
+    if (!this.searchManager) return;
+    // Deduplicate against already-indexed AND against entries already in queue
+    const queuedIds = new Set(this.queue.map(e => e.entry.id));
+    let added = 0;
+    for (const entry of entries) {
+      if (this.searchManager.hasEntry(entry.entry.id)) continue;
+      if (queuedIds.has(entry.entry.id)) continue;
+      this.queue.push(entry);
+      queuedIds.add(entry.entry.id);
+      added++;
+    }
+    log.info(`[queue] enqueued ${added} entries from ${source} (${this.queue.length} total pending)`);
+    this.drain();
+  }
+
+  /** Run bootstrap: enqueue all chunks and process to completion before anything else. */
+  async bootstrap(entries: PendingEntry[]): Promise<number> {
+    this._bootstrapping = true;
+    log.info(`[queue] bootstrap starting: ${entries.length} entries`);
+    this.enqueue(entries, "bootstrap");
+    // Wait for the queue to fully drain
+    await this.waitForDrain();
+    this._bootstrapping = false;
+    const count = this.searchManager?.getEntryCount() ?? 0;
+    log.info(`[queue] bootstrap complete: ${count} vectors in index`);
+    return count;
+  }
+
+  /** Process the queue sequentially — only one batch at a time. */
+  private async drain(): Promise<void> {
+    if (this.processing || this.queue.length === 0 || !this.searchManager) return;
+    this.processing = true;
+
+    try {
+      while (this.queue.length > 0) {
+        // Take a batch from the front of the queue
+        const batch = this.queue.splice(0, Math.min(this.queue.length, 500));
+        log.info(`[queue] processing batch: ${batch.length} entries (${this.queue.length} remaining)`);
+        try {
+          await this.searchManager.addEntriesBatch(batch);
+        } catch (err) {
+          log.error(`[queue] batch failed: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private waitForDrain(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const check = () => {
+        if (!this.processing && this.queue.length === 0) {
+          resolve();
+        } else {
+          setTimeout(check, 500);
+        }
+      };
+      check();
+    });
+  }
+
+  clear(): void {
+    this.queue = [];
+    this.processing = false;
+    this._bootstrapping = false;
+    this.searchManager = null;
+  }
+}
+
+const embeddingQueue = new EmbeddingQueue();
 
 // =============================================================================
 // Plugin State
@@ -116,7 +207,7 @@ interface WoprPluginApi {
 // =============================================================================
 
 function getDb(api: WoprPluginApi): any | null {
-  return api.getExtension<any>('memory:db') ?? null;
+  return api.getExtension<any>("memory:db") ?? null;
 }
 
 /** Ensure the embedding column exists on the chunks table (plugin owns this column) */
@@ -124,7 +215,7 @@ function ensureEmbeddingColumn(db: any): void {
   if (!db || typeof db.prepare !== "function" || typeof db.exec !== "function") return;
   try {
     const cols = db.prepare(`PRAGMA table_info(chunks)`).all() as Array<{ name: string }>;
-    if (!cols.some((c: any) => c.name === 'embedding')) {
+    if (!cols.some((c: any) => c.name === "embedding")) {
       db.exec(`ALTER TABLE chunks ADD COLUMN embedding BLOB`);
     }
   } catch (err) {
@@ -163,12 +254,10 @@ async function loadChunkMetadata(api: WoprPluginApi): Promise<Map<string, import
   const entries = new Map<string, import("./search.js").VectorEntry>();
 
   try {
-    const stmt = db.prepare(
-      `SELECT id, path, start_line, end_line, source, text FROM chunks`
-    );
+    const stmt = db.prepare(`SELECT id, path, start_line, end_line, source, text FROM chunks`);
     for (const row of stmt.iterate()) {
       const r = row as any;
-      const text = typeof r.text === 'string' ? r.text : '';
+      const text = typeof r.text === "string" ? r.text : "";
       const entry: import("./search.js").VectorEntry = {
         id: r.id,
         path: r.path,
@@ -185,7 +274,13 @@ async function loadChunkMetadata(api: WoprPluginApi): Promise<Map<string, import
   } catch (err) {
     log.error(`Failed to load chunk metadata: ${err}`);
   } finally {
-    if (owned) { try { db.close(); } catch { /* ignore */ } }
+    if (owned) {
+      try {
+        db.close();
+      } catch {
+        /* ignore */
+      }
+    }
   }
   return entries;
 }
@@ -196,9 +291,9 @@ function getHnswPath(api: WoprPluginApi): string | undefined {
   // Try DB handle (available after core memory init)
   const db = getDb(api);
   if (db) {
-    const dbPath: unknown = typeof db.location === 'function' ? db.location() : db.name;
-    if (typeof dbPath === 'string' && dbPath && dbPath !== ':memory:') {
-      return dbPath + '.hnsw';
+    const dbPath: unknown = typeof db.location === "function" ? db.location() : db.name;
+    if (typeof dbPath === "string" && dbPath && dbPath !== ":memory:") {
+      return `${dbPath}.hnsw`;
     }
   }
   // Fallback: WOPR_HOME convention (always available)
@@ -207,26 +302,23 @@ function getHnswPath(api: WoprPluginApi): string | undefined {
   return undefined;
 }
 
-function storeEmbeddingsToDb(
-  api: WoprPluginApi,
-  embeddings: Array<{ id: string; embedding: number[] }>
-): void {
+function storeEmbeddingsToDb(api: WoprPluginApi, embeddings: Array<{ id: string; embedding: number[] }>): void {
   const db = getDb(api);
   if (!db || embeddings.length === 0 || typeof db.prepare !== "function" || typeof db.exec !== "function") return;
   ensureEmbeddingColumn(db);
 
   try {
     db.exec("BEGIN");
-    const update = db.prepare(
-      `UPDATE chunks SET embedding = ? WHERE id = ?`
-    );
+    const update = db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`);
     for (const entry of embeddings) {
       const blob = Buffer.from(new Float32Array(entry.embedding).buffer);
       update.run(blob, entry.id);
     }
     db.exec("COMMIT");
   } catch (err) {
-    try { db.exec("ROLLBACK"); } catch {}
+    try {
+      db.exec("ROLLBACK");
+    } catch {}
     log.error(`Failed to store embeddings: ${err}`);
   }
 }
@@ -250,10 +342,18 @@ function persistNewEntryToDb(api: WoprPluginApi, id: string): void {
          embedding = excluded.embedding,
          updated_at = excluded.updated_at,
          text = excluded.text,
-         model = excluded.model`
+         model = excluded.model`,
     ).run(
-      entry.id, entry.path, entry.source, entry.startLine, entry.endLine,
-      contentHash(entry.content), state.embeddingProvider.id, entry.content, Date.now(), blob
+      entry.id,
+      entry.path,
+      entry.source,
+      entry.startLine,
+      entry.endLine,
+      contentHash(entry.content),
+      state.embeddingProvider.id,
+      entry.content,
+      Date.now(),
+      blob,
     );
   } catch (err) {
     log.warn(`persistNewEntryToDb failed for ${id}: ${err instanceof Error ? err.message : err}`);
@@ -264,8 +364,10 @@ function persistNewEntryToDb(api: WoprPluginApi, id: string): void {
 // Initialization
 // =============================================================================
 
+let initInProgress = false;
 async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemoryConfig>) {
-  if (state.initialized) return;
+  if (state.initialized || initInProgress) return;
+  initInProgress = true;
 
   // Merge user config with defaults
   state.config = {
@@ -307,7 +409,7 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
             endLine: r.endLine || 0,
             source: r.source || "memory",
             snippet: r.snippet || r.content || "",
-            content: r.content || r.snippet || "",  // Use content if available, fallback to snippet
+            content: r.content || r.snippet || "", // Use content if available, fallback to snippet
             textScore: r.score || 0,
           }));
         }
@@ -323,8 +425,11 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
       state.config,
       state.embeddingProvider,
       keywordSearchFn,
-      hnswPathFn
+      hnswPathFn,
     );
+
+    // Attach the queue to the search manager
+    embeddingQueue.attach(state.searchManager);
 
     const loadedVectors = state.searchManager.getEntryCount();
     state.api = api;
@@ -341,9 +446,8 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
       api.log.info(`[semantic-memory] Initialized — waiting for memory:filesChanged events from core`);
     }
   } catch (err) {
-    api.log.error(
-      `[semantic-memory] Failed to initialize: ${err instanceof Error ? err.message : String(err)}`
-    );
+    initInProgress = false;
+    api.log.error(`[semantic-memory] Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -351,18 +455,15 @@ async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemor
 // Bootstrap: embed existing chunks that have no HNSW vectors
 // =============================================================================
 
-async function bootstrapEmbeddings(
-  chunkMetadata: Map<string, import("./search.js").VectorEntry>
-): Promise<void> {
+async function bootstrapEmbeddings(chunkMetadata: Map<string, import("./search.js").VectorEntry>): Promise<void> {
   const heapMB = () => Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
   log.info(`Bootstrap start (heap=${heapMB()}MB)`);
-  if (!state.searchManager || !state.embeddingProvider) return;
+  if (!state.embeddingProvider) return;
 
-  const batch: PendingEntry[] = [];
-  for (const [id, entry] of chunkMetadata) {
-    if (state.searchManager.hasEntry(id)) continue;
+  const entries: PendingEntry[] = [];
+  for (const [, entry] of chunkMetadata) {
     if (!entry.content || entry.content.length < 10) continue;
-    batch.push({
+    entries.push({
       entry: {
         id: entry.id,
         path: entry.path,
@@ -376,14 +477,14 @@ async function bootstrapEmbeddings(
     });
   }
 
-  if (batch.length === 0) {
+  if (entries.length === 0) {
     log.info("Bootstrap: all chunks already indexed");
     return;
   }
 
-  log.info(`Bootstrap: embedding ${batch.length} chunks via ${state.embeddingProvider.id} (heap=${heapMB()}MB)`);
-  const count = await state.searchManager.addEntriesBatch(batch);
-  log.info(`Bootstrap complete: ${count} vectors added to HNSW (heap=${heapMB()}MB)`);
+  log.info(`Bootstrap: ${entries.length} chunks via ${state.embeddingProvider.id} (heap=${heapMB()}MB)`);
+  await embeddingQueue.bootstrap(entries);
+  log.info(`Bootstrap complete (heap=${heapMB()}MB)`);
 }
 
 // =============================================================================
@@ -393,10 +494,7 @@ async function bootstrapEmbeddings(
 /**
  * Before inject hook - auto-recall relevant memories
  */
-async function handleBeforeInject(
-  api: WoprPluginApi,
-  payload: any
-): Promise<void> {
+async function handleBeforeInject(api: WoprPluginApi, payload: any): Promise<void> {
   if (!state.initialized || !state.searchManager || !state.config.autoRecall.enabled) {
     return;
   }
@@ -410,24 +508,16 @@ async function handleBeforeInject(
   const lastUserMessage = { role: "user", content: payload.message };
 
   try {
-    const recall = await performAutoRecall(
-      lastUserMessage.content,
-      state.searchManager,
-      state.config
-    );
+    const recall = await performAutoRecall(lastUserMessage.content, state.searchManager, state.config);
 
     if (recall && recall.memories.length > 0) {
-      api.log.info(
-        `[semantic-memory] Recalled ${recall.memories.length} memories (queryLen=${recall.query.length})`
-      );
+      api.log.info(`[semantic-memory] Recalled ${recall.memories.length} memories (queryLen=${recall.query.length})`);
       // Prepend memory context to the mutable message payload
       // Core uses emitMutableIncoming → payload.message is mutable
       payload.message = `${recall.context}\n\n${payload.message}`;
     }
   } catch (err) {
-    api.log.error(
-      `[semantic-memory] Auto-recall failed: ${err instanceof Error ? err.message : String(err)}`
-    );
+    api.log.error(`[semantic-memory] Auto-recall failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -435,10 +525,7 @@ async function handleBeforeInject(
  * After inject hook - real-time indexing of ALL session content
  * Payload is SessionResponseEvent: { session, message, response, from }
  */
-async function handleAfterInject(
-  api: WoprPluginApi,
-  payload: any
-): Promise<void> {
+async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void> {
   if (!state.initialized || !state.searchManager) {
     return;
   }
@@ -458,9 +545,10 @@ async function handleAfterInject(
     const indexText = async (text: string, baseId: string, source: string) => {
       if (ms?.enabled && ms.scales.length > 0) {
         const subChunks = multiScaleChunk(
-          text, baseId,
+          text,
+          baseId,
           { path: `session:${sessionName}`, startLine: 0, endLine: 0, source },
-          ms.scales
+          ms.scales,
         );
         for (const sc of subChunks) {
           if (!state.searchManager!.hasEntry(sc.entry.id)) {
@@ -471,8 +559,16 @@ async function handleAfterInject(
         }
       } else {
         await state.searchManager!.addEntry(
-          { id: baseId, path: `session:${sessionName}`, startLine: 0, endLine: 0, source, snippet: text.slice(0, 500), content: text },
-          text
+          {
+            id: baseId,
+            path: `session:${sessionName}`,
+            startLine: 0,
+            endLine: 0,
+            source,
+            snippet: text.slice(0, 500),
+            content: text,
+          },
+          text,
         );
         persistNewEntryToDb(api, baseId);
         indexedCount++;
@@ -486,7 +582,11 @@ async function handleAfterInject(
     }
 
     if (payload.response.trim().length > 10) {
-      await indexText(payload.response, `rt-${contentHash(`${sessionName}:assistant:${payload.response}`)}`, "realtime-assistant");
+      await indexText(
+        payload.response,
+        `rt-${contentHash(`${sessionName}:assistant:${payload.response}`)}`,
+        "realtime-assistant",
+      );
     }
 
     if (indexedCount > 0) {
@@ -517,7 +617,7 @@ async function handleAfterInject(
               snippet: candidate.text.slice(0, 500),
               content: candidate.text,
             },
-            candidate.text
+            candidate.text,
           );
           persistNewEntryToDb(api, id);
         }
@@ -526,9 +626,7 @@ async function handleAfterInject(
       }
     }
   } catch (err) {
-    api.log.error(
-      `[semantic-memory] Real-time indexing failed: ${err instanceof Error ? err.message : String(err)}`
-    );
+    api.log.error(`[semantic-memory] Real-time indexing failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -546,7 +644,7 @@ function multiScaleChunk(
   text: string,
   baseId: string,
   meta: { path: string; startLine: number; endLine: number; source: string },
-  scales: Array<{ tokens: number; overlap: number }>
+  scales: Array<{ tokens: number; overlap: number }>,
 ): PendingEntry[] {
   const results: PendingEntry[] = [];
 
@@ -657,7 +755,9 @@ const plugin: SemanticMemoryPlugin = {
 
     // Clean up previous subscriptions if re-initialized
     for (const unsub of state.eventCleanup) {
-      try { unsub(); } catch {}
+      try {
+        unsub();
+      } catch {}
     }
     state.eventCleanup = [];
 
@@ -678,12 +778,14 @@ const plugin: SemanticMemoryPlugin = {
 
     // Subscribe to core's file change events for vector indexing
     const unsubFilesChanged = api.events.on("memory:filesChanged", async (payload: any) => {
-      const heapMB = () => Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-      log.info(`filesChanged handler start (heap=${heapMB()}MB)`);
       if (!state.initialized || !state.searchManager) return;
+      if (embeddingQueue.bootstrapping) {
+        log.info(`filesChanged: skipped (bootstrap in progress)`);
+        return;
+      }
 
       const changes = payload.changes || [];
-      const batch: PendingEntry[] = [];
+      const entries: PendingEntry[] = [];
       const ms = state.config.chunking.multiScale;
 
       for (const change of changes) {
@@ -695,19 +797,14 @@ const plugin: SemanticMemoryPlugin = {
           const id = chunk.id;
 
           if (ms?.enabled && ms.scales.length > 0) {
-            // Multi-scale: produce vectors at each granularity
             const subChunks = multiScaleChunk(
               chunk.text, id,
               { path: change.absPath || change.path, startLine: chunk.startLine, endLine: chunk.endLine, source: change.source || "memory" },
-              ms.scales
+              ms.scales,
             );
-            for (const sc of subChunks) {
-              if (!state.searchManager.hasEntry(sc.entry.id)) batch.push(sc);
-            }
+            for (const sc of subChunks) entries.push(sc);
           } else {
-            // Single scale (original behavior)
-            if (state.searchManager.hasEntry(id)) continue;
-            batch.push({
+            entries.push({
               entry: {
                 id,
                 path: change.absPath || change.path,
@@ -723,76 +820,50 @@ const plugin: SemanticMemoryPlugin = {
         }
       }
 
-      log.info(`filesChanged: ${changes.length} changes -> ${batch.length} entries to embed (heap=${heapMB()}MB)`);
-
-      if (batch.length > 0) {
-        try {
-          log.info(`filesChanged: calling addEntriesBatch (heap=${heapMB()}MB)`);
-          const count = await state.searchManager.addEntriesBatch(batch);
-          log.info(`filesChanged: addEntriesBatch done, ${count} indexed (heap=${heapMB()}MB)`);
-          api.log.info(`[semantic-memory] Event-driven indexed ${count} chunks from memory:filesChanged`);
-
-          // Persist embeddings to core's SQLite for base chunk IDs only.
-          // Multi-scale suffixed IDs (e.g., id-s512) don't exist in core's chunks table,
-          // so we only UPDATE rows matching the original chunk.id.
-          if (count > 0) {
-            const embeddings: Array<{ id: string; embedding: number[] }> = [];
-            const seenBaseIds = new Set<string>();
-            for (const change of changes) {
-              if (!change.chunks) continue;
-              for (const chunk of change.chunks) {
-                if (seenBaseIds.has(chunk.id)) continue;
-                const stored = state.searchManager.getEntry(chunk.id);
-                if (stored && stored.embedding && stored.embedding.length > 0) {
-                  embeddings.push({ id: chunk.id, embedding: stored.embedding });
-                  seenBaseIds.add(chunk.id);
-                }
-              }
-            }
-            log.info(`filesChanged: storing ${embeddings.length} embeddings to SQLite (heap=${heapMB()}MB)`);
-            if (embeddings.length > 0) {
-              storeEmbeddingsToDb(api, embeddings);
-              api.log.info(`[semantic-memory] Stored ${embeddings.length} embeddings to SQLite`);
-            }
-          }
-        } catch (err) {
-          api.log.error(`[semantic-memory] Batch embedding failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
+      if (entries.length > 0) {
+        embeddingQueue.enqueue(entries, `filesChanged(${changes.length} files)`);
       }
-      log.info(`filesChanged handler done (heap=${heapMB()}MB)`);
     });
 
     // Hook into memory_search to provide semantic results
-    const unsubSearch = api.events.on("memory:search", async (payload: {
-      query: string;
-      maxResults: number;
-      minScore: number;
-      sessionName: string;
-      results: any[] | null;
-    }) => {
-      api.log.info(`[semantic-memory] memory:search handler called for: "${payload.query}"`);
+    const unsubSearch = api.events.on(
+      "memory:search",
+      async (payload: {
+        query: string;
+        maxResults: number;
+        minScore: number;
+        sessionName: string;
+        results: any[] | null;
+      }) => {
+        api.log.info(`[semantic-memory] memory:search handler called for: "${payload.query}"`);
 
-      if (!state.initialized || !state.searchManager) {
-        api.log.info(`[semantic-memory] Not initialized, skipping (initialized=${state.initialized})`);
-        return;
-      }
+        if (!state.initialized || !state.searchManager) {
+          api.log.info(`[semantic-memory] Not initialized, skipping (initialized=${state.initialized})`);
+          return;
+        }
 
-      try {
-        api.log.info(`[semantic-memory] Starting semantic search...`);
-        const results = await state.searchManager.search(payload.query, payload.maxResults);
-        api.log.info(`[semantic-memory] Raw results: ${results.length}`);
-        payload.results = results.filter((r) => r.score >= payload.minScore);
-        api.log.info(`[semantic-memory] After filter: ${payload.results.length} results (minScore: ${payload.minScore})`);
-      } catch (err) {
-        api.log.error(`[semantic-memory] Search failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    });
+        try {
+          api.log.info(`[semantic-memory] Starting semantic search...`);
+          const results = await state.searchManager.search(payload.query, payload.maxResults);
+          api.log.info(`[semantic-memory] Raw results: ${results.length}`);
+          payload.results = results.filter((r) => r.score >= payload.minScore);
+          api.log.info(
+            `[semantic-memory] After filter: ${payload.results.length} results (minScore: ${payload.minScore})`,
+          );
+        } catch (err) {
+          api.log.error(`[semantic-memory] Search failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    );
 
     state.eventCleanup = [unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch];
     api.log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 
   async shutdown() {
+    // Stop the embedding queue first
+    embeddingQueue.clear();
+
     // Unsubscribe all event handlers
     for (const unsub of state.eventCleanup) {
       try { unsub(); } catch {}
@@ -831,7 +902,7 @@ const plugin: SemanticMemoryPlugin = {
         snippet: text.slice(0, 500),
         content: text,
       },
-      text
+      text,
     );
     if (state.api) persistNewEntryToDb(state.api, id);
   },
@@ -844,5 +915,5 @@ const plugin: SemanticMemoryPlugin = {
 export default plugin;
 
 // Re-export types
-export type { SemanticMemoryConfig, EmbeddingProvider, MemorySearchResult } from "./types.js";
+export type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 export { DEFAULT_CONFIG } from "./types.js";

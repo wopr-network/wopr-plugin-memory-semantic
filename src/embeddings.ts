@@ -11,9 +11,7 @@ import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
-export async function createOpenAiEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
+export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("No API key found for OpenAI. Set OPENAI_API_KEY environment variable.");
@@ -67,18 +65,11 @@ export async function createOpenAiEmbeddingProvider(
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 
-export async function createGeminiEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
-  const apiKey =
-    config.apiKey ||
-    process.env.GOOGLE_API_KEY?.trim() ||
-    process.env.GEMINI_API_KEY?.trim();
+export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
+  const apiKey = config.apiKey || process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
 
   if (!apiKey) {
-    throw new Error(
-      "No API key found for Gemini. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
-    );
+    throw new Error("No API key found for Gemini. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.");
   }
 
   const baseUrl = (config.baseUrl || DEFAULT_GEMINI_BASE_URL).replace(/\/$/, "");
@@ -171,9 +162,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   return sanitized.map((value) => value / magnitude);
 }
 
-export async function createLocalEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
+export async function createLocalEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const modelPath = config.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = config.local?.modelCacheDir?.trim();
 
@@ -211,7 +200,7 @@ export async function createLocalEmbeddingProvider(
         texts.map(async (text) => {
           const embedding = await ctx.getEmbeddingFor(text);
           return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        })
+        }),
       );
     },
   };
@@ -221,14 +210,8 @@ export async function createLocalEmbeddingProvider(
 // Ollama Embeddings
 // =============================================================================
 
-export async function createOllamaEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
-  const baseUrl = (
-    config.ollama?.baseUrl ||
-    process.env.OLLAMA_HOST ||
-    "http://ollama:11434"
-  ).replace(/\/$/, "");
+export async function createOllamaEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
+  const baseUrl = (config.ollama?.baseUrl || process.env.OLLAMA_HOST || "http://ollama:11434").replace(/\/$/, "");
   const model = config.ollama?.model || "qwen3-embedding:8b";
 
   // Verify Ollama is reachable
@@ -288,9 +271,7 @@ export async function createOllamaEmbeddingProvider(
 // Provider Factory
 // =============================================================================
 
-export async function createEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
+export async function createEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const provider = config.provider;
 
   if (provider === "openai") {

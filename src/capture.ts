@@ -149,7 +149,7 @@ export function extractCaptureCandidate(text: string): CaptureCandidate {
  */
 export function extractFromConversation(
   messages: Array<{ role: string; content: string }>,
-  config: SemanticMemoryConfig
+  config: SemanticMemoryConfig,
 ): CaptureCandidate[] {
   const candidates: CaptureCandidate[] = [];
 
@@ -165,7 +165,5 @@ export function extractFromConversation(
   }
 
   // Sort by importance, take top N
-  return candidates
-    .sort((a, b) => b.importance - a.importance)
-    .slice(0, config.autoCapture.maxPerConversation);
+  return candidates.sort((a, b) => b.importance - a.importance).slice(0, config.autoCapture.maxPerConversation);
 }
