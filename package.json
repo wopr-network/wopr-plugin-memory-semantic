@@ -9,7 +9,9 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "openai": "^4.0.0"
+    "openai": "^4.0.0",
+    "usearch": "^2.0.0",
+    "winston": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
