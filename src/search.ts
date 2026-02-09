@@ -376,14 +376,11 @@ export async function createSemanticSearchManager(
   };
 
   const getEmbedding = async (text: string): Promise<number[]> => {
-    // Truncate text to ~4000 chars to stay safely under 8192 token limit
-    const truncatedText = text.length > 4000 ? text.slice(0, 4000) : text;
-
-    const cacheKey = createHash('sha256').update(truncatedText).digest('hex');
+    const cacheKey = createHash('sha256').update(text).digest('hex');
     const cached = embeddingCache.get(cacheKey);
     if (cached) return cached;
 
-    const embedding = await embeddingProvider.embedQuery(truncatedText);
+    const embedding = await embeddingProvider.embedQuery(text);
     if (config.cache.enabled) {
       embeddingCache.set(cacheKey, embedding);
       if (config.cache.maxEntries && embeddingCache.size > config.cache.maxEntries) {
@@ -501,10 +498,7 @@ export async function createSemanticSearchManager(
       });
       if (newEntries.length === 0) return 0;
 
-      // Truncate texts to stay under token limit (~4000 chars = ~1000 tokens, safe under 8192)
-      const truncatedTexts = newEntries.map(e =>
-        e.text.length > 4000 ? e.text.slice(0, 4000) : e.text
-      );
+      const texts = newEntries.map(e => e.text);
 
       // OpenAI limit: 300,000 tokens per request, ~4 chars per token
       const MAX_TOKENS_PER_REQUEST = 280000; // Leave margin below 300k
@@ -514,13 +508,13 @@ export async function createSemanticSearchManager(
       // Build batches based on actual token estimates
       let batchStart = 0;
       let batchNum = 0;
-      while (batchStart < truncatedTexts.length) {
+      while (batchStart < texts.length) {
         let batchTokens = 0;
         let batchEnd = batchStart;
 
         // Add texts until we hit the token limit
-        while (batchEnd < truncatedTexts.length) {
-          const textTokens = Math.ceil(truncatedTexts[batchEnd].length / CHARS_PER_TOKEN);
+        while (batchEnd < texts.length) {
+          const textTokens = Math.ceil(texts[batchEnd].length / CHARS_PER_TOKEN);
           if (batchTokens + textTokens > MAX_TOKENS_PER_REQUEST && batchEnd > batchStart) {
             break; // This text would exceed limit, stop here
           }
@@ -528,7 +522,7 @@ export async function createSemanticSearchManager(
           batchEnd++;
         }
 
-        const batchTexts = truncatedTexts.slice(batchStart, batchEnd);
+        const batchTexts = texts.slice(batchStart, batchEnd);
         const batchEntries = newEntries.slice(batchStart, batchEnd);
         batchNum++;
 
