@@ -3,21 +3,25 @@
  * Uses usearch HNSW index for O(log n) approximate nearest neighbor search
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
 import winston from "winston";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 
+const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
+try { mkdirSync(logsDir, { recursive: true }); } catch {}
+
 const log = winston.createLogger({
   level: "debug",
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json(),
-  ),
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
   defaultMeta: { service: "semantic-search" },
-  transports: [new winston.transports.Console()],
+  transports: [
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
+    new winston.transports.Console({ level: "warn" }),
+  ],
 });
 
 // =============================================================================
@@ -31,7 +35,7 @@ export type HybridVectorResult = {
   endLine: number;
   source: string;
   snippet: string;
-  content: string;      // Full indexed text for retrieval
+  content: string; // Full indexed text for retrieval
   vectorScore: number;
 };
 
@@ -42,7 +46,7 @@ export type HybridKeywordResult = {
   endLine: number;
   source: string;
   snippet: string;
-  content: string;      // Full indexed text for retrieval
+  content: string; // Full indexed text for retrieval
   textScore: number;
 };
 
@@ -151,7 +155,7 @@ export interface VectorEntry {
   endLine: number;
   source: string;
   snippet: string;
-  content: string;      // Full indexed text for retrieval
+  content: string; // Full indexed text for retrieval
   embedding: number[];
 }
 
@@ -195,14 +199,14 @@ export async function createSemanticSearchManager(
   hnswPathOrFn?: string | (() => string | undefined),
 ): Promise<SemanticSearchManager> {
   // HNSW index + metadata maps (replaces brute-force vectors[] array)
-  const metadata = new Map<bigint, VectorEntry>();   // label → full entry
-  const idToLabel = new Map<string, bigint>();        // string ID → numeric label
+  const metadata = new Map<bigint, VectorEntry>(); // label → full entry
+  const idToLabel = new Map<string, bigint>(); // string ID → numeric label
   const existingIds = new Set<string>();
   let nextLabel = 0n;
 
   /** Resolve the HNSW path (may be lazy) */
   const resolveHnswPath = (): string | undefined =>
-    typeof hnswPathOrFn === 'function' ? hnswPathOrFn() : hnswPathOrFn;
+    typeof hnswPathOrFn === "function" ? hnswPathOrFn() : hnswPathOrFn;
 
   // ── Save helper ──────────────────────────────────────────────────────
   const saveIndex = (): void => {
@@ -228,7 +232,7 @@ export async function createSemanticSearchManager(
                 snippet: entry.snippet,
                 content: entry.content,
               }
-            : null
+            : null,
         );
       }
       const map: HnswMapFile = { dims: index.dimensions(), entries };
@@ -242,8 +246,12 @@ export async function createSemanticSearchManager(
       log.info(`Saved HNSW index to disk: ${metadata.size} vectors, ${hnswPath}`);
     } catch (err) {
       log.warn(`Failed to save HNSW index: ${err instanceof Error ? err.message : err}`);
-      try { unlinkSync(tmpMapPath); } catch {}
-      try { unlinkSync(tmpHnswPath); } catch {}
+      try {
+        unlinkSync(tmpMapPath);
+      } catch {}
+      try {
+        unlinkSync(tmpHnswPath);
+      } catch {}
     }
   };
 
@@ -258,36 +266,58 @@ export async function createSemanticSearchManager(
       try {
         const saved = JSON.parse(readFileSync(initMapPath, "utf-8")) as HnswMapFile;
         if (saved.dims) savedDims = saved.dims;
-      } catch { /* will fall through to rebuild */ }
+      } catch {
+        /* will fall through to rebuild */
+      }
     }
 
     // Probe provider for actual dims (short test string)
     let dimsProbed = false;
     try {
       const probe = await embeddingProvider.embedQuery("dimension probe");
-      if (probe.length > 0) { dims = probe.length; dimsProbed = true; }
+      if (probe.length > 0) {
+        dims = probe.length;
+        dimsProbed = true;
+      }
     } catch {
       // Provider may not be ready yet; fall back to saved dims
-      if (savedDims) { dims = savedDims; dimsProbed = true; }
+      if (savedDims) {
+        dims = savedDims;
+        dimsProbed = true;
+      }
     }
 
     if (!dimsProbed && !savedDims) {
       throw new Error(
         `Cannot determine embedding dimensions: provider probe failed and no saved index found. ` +
-        `Ensure the embedding provider is reachable before initializing.`
+          `Ensure the embedding provider is reachable before initializing.`,
       );
     }
 
     // Detect provider change (dimension mismatch with saved index)
-    if (savedDims && savedDims !== dims && initPath && initMapPath) {
+    const hasSavedIndex = initPath && initMapPath && existsSync(initPath);
+    if (hasSavedIndex && (savedDims === undefined || savedDims !== dims)) {
       log.warn(
-        `Dimension mismatch: saved=${savedDims}, current=${dims}. ` +
-        `Provider changed? Deleting old HNSW, will rebuild from events.`
+        `Dimension mismatch or unknown saved dims: saved=${savedDims ?? "none"}, current=${dims}. ` +
+          `Deleting old HNSW, will rebuild from events.`,
       );
-      try { unlinkSync(initPath); } catch {}
-      try { unlinkSync(initMapPath); } catch {}
+      try {
+        unlinkSync(initPath!);
+      } catch {}
+      try {
+        unlinkSync(initMapPath!);
+      } catch {}
       savedDims = undefined; // Force fresh start
     }
+  }
+
+  {
+    const memPre = process.memoryUsage();
+    log.info(
+      `Pre-HNSW index creation: dims=${dims} | ` +
+        `heap=${Math.round(memPre.heapUsed / 1024 / 1024)}MB rss=${Math.round(memPre.rss / 1024 / 1024)}MB ` +
+        `ext=${Math.round(memPre.external / 1024 / 1024)}MB buf=${Math.round(memPre.arrayBuffers / 1024 / 1024)}MB`,
+    );
   }
 
   const index = new Index({
@@ -299,6 +329,15 @@ export async function createSemanticSearchManager(
     expansion_search: 64,
     multi: false,
   });
+
+  {
+    const memPost = process.memoryUsage();
+    log.info(
+      `Post-HNSW index creation: capacity=${index.capacity()} size=${index.size()} | ` +
+        `heap=${Math.round(memPost.heapUsed / 1024 / 1024)}MB rss=${Math.round(memPost.rss / 1024 / 1024)}MB ` +
+        `ext=${Math.round(memPost.external / 1024 / 1024)}MB buf=${Math.round(memPost.arrayBuffers / 1024 / 1024)}MB`,
+    );
+  }
 
   // ── Try loading from disk ────────────────────────────────────────────
   let loadedFromDisk = false;
@@ -318,6 +357,11 @@ export async function createSemanticSearchManager(
 
         index.load(initPath);
 
+        // Validate loaded index dimensions match current provider
+        if (index.dimensions() !== dims) {
+          throw new Error(`dimension mismatch: loaded=${index.dimensions()}, expected=${dims}. Provider changed.`);
+        }
+
         const map = saved as HnswMapFile;
         if (index.size() !== map.entries.length) {
           throw new Error(`size mismatch: index=${index.size()}, map=${map.entries.length}`);
@@ -327,7 +371,10 @@ export async function createSemanticSearchManager(
         let orphaned = 0;
         for (let i = 0; i < map.entries.length; i++) {
           const e = map.entries[i];
-          if (!e) { orphaned++; continue; }
+          if (!e) {
+            orphaned++;
+            continue;
+          }
           const label = BigInt(i);
           metadata.set(label, {
             id: e.id,
@@ -346,17 +393,16 @@ export async function createSemanticSearchManager(
         nextLabel = BigInt(map.entries.length);
         loadedFromDisk = true;
 
-        log.info(
-          `Loaded HNSW from disk: ${matched} matched, ${orphaned} orphaned, ` +
-          `${index.size()}-node graph`
-        );
+        log.info(`Loaded HNSW from disk: ${matched} matched, ${orphaned} orphaned, ` + `${index.size()}-node graph`);
       } catch (err) {
-        log.warn(
-          `Failed to load HNSW from disk, rebuilding: ${err instanceof Error ? err.message : err}`
-        );
+        log.warn(`Failed to load HNSW from disk, rebuilding: ${err instanceof Error ? err.message : err}`);
         // Delete stale files so we start clean
-        try { unlinkSync(initPath); } catch {}
-        try { unlinkSync(initMapPath); } catch {}
+        try {
+          unlinkSync(initPath);
+        } catch {}
+        try {
+          unlinkSync(initMapPath);
+        } catch {}
         metadata.clear();
         idToLabel.clear();
         existingIds.clear();
@@ -375,7 +421,7 @@ export async function createSemanticSearchManager(
 
   log.info(
     `HNSW ready: dims=${index.dimensions()}, vectors=${metadata.size}, ` +
-    `connectivity=${index.connectivity()}, persisted=${!!resolveHnswPath()}`
+      `connectivity=${index.connectivity()}, persisted=${!!resolveHnswPath()}`,
   );
 
   // Embedding cache
@@ -389,7 +435,7 @@ export async function createSemanticSearchManager(
   };
 
   const getEmbedding = async (text: string): Promise<number[]> => {
-    const cacheKey = createHash('sha256').update(text).digest('hex');
+    const cacheKey = createHash("sha256").update(text).digest("hex");
     const cached = embeddingCache.get(cacheKey);
     if (cached) return cached;
 
@@ -404,10 +450,7 @@ export async function createSemanticSearchManager(
     return embedding;
   };
 
-  const vectorSearch = async (
-    queryEmbedding: number[],
-    limit: number
-  ): Promise<HybridVectorResult[]> => {
+  const vectorSearch = async (queryEmbedding: number[], limit: number): Promise<HybridVectorResult[]> => {
     if (metadata.size === 0 || limit <= 0) {
       return [];
     }
@@ -512,111 +555,149 @@ export async function createSemanticSearchManager(
     async addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number> {
       // Filter out already indexed entries AND deduplicate within batch
       const seenInBatch = new Set<string>();
-      const newEntries = entries.filter(e => {
+      const newEntries = entries.filter((e) => {
         if (existingIds.has(e.entry.id) || seenInBatch.has(e.entry.id)) return false;
         seenInBatch.add(e.entry.id);
         return true;
       });
       if (newEntries.length === 0) return 0;
 
-      const texts = newEntries.map(e => e.text);
+        const texts = newEntries.map((e) => e.text);
 
-      // OpenAI limit: 300,000 tokens per request, ~4 chars per token
-      const MAX_TOKENS_PER_REQUEST = 280000; // Leave margin below 300k
-      const CHARS_PER_TOKEN = 4;
-      let addedCount = 0;
+        // Local models (ollama/local) are much slower than cloud APIs — use smaller batches
+        const isLocal = embeddingProvider.id === "ollama" || embeddingProvider.id === "local";
+        const MAX_TOKENS_PER_REQUEST = isLocal ? 8000 : 280000;
+        const CHARS_PER_TOKEN = 4;
+        let addedCount = 0;
 
-      // Build batches based on actual token estimates
-      let batchStart = 0;
-      let batchNum = 0;
-      while (batchStart < texts.length) {
-        let batchTokens = 0;
-        let batchEnd = batchStart;
+        // Build batches based on actual token estimates
+        let batchStart = 0;
+        let batchNum = 0;
+        while (batchStart < texts.length) {
+          let batchTokens = 0;
+          let batchEnd = batchStart;
 
-        // Add texts until we hit the token limit
-        while (batchEnd < texts.length) {
-          const textTokens = Math.ceil(texts[batchEnd].length / CHARS_PER_TOKEN);
-          if (batchTokens + textTokens > MAX_TOKENS_PER_REQUEST && batchEnd > batchStart) {
-            break; // This text would exceed limit, stop here
+          // Add texts until we hit the token limit
+          while (batchEnd < texts.length) {
+            const textTokens = Math.ceil(texts[batchEnd].length / CHARS_PER_TOKEN);
+            if (batchTokens + textTokens > MAX_TOKENS_PER_REQUEST && batchEnd > batchStart) {
+              break; // This text would exceed limit, stop here
+            }
+            batchTokens += textTokens;
+            batchEnd++;
           }
-          batchTokens += textTokens;
-          batchEnd++;
-        }
 
-        const batchTexts = texts.slice(batchStart, batchEnd);
-        const batchEntries = newEntries.slice(batchStart, batchEnd);
-        batchNum++;
+          const batchTexts = texts.slice(batchStart, batchEnd);
+          const batchEntries = newEntries.slice(batchStart, batchEnd);
+          batchNum++;
 
-        log.info(`Embedding batch ${batchNum}: ${batchTexts.length} chunks, ~${batchTokens} tokens`);
+          const memBefore = process.memoryUsage();
+          log.info(
+            `Embedding batch ${batchNum}: ${batchTexts.length} chunks, ~${batchTokens} tokens | ` +
+              `heap=${Math.round(memBefore.heapUsed / 1024 / 1024)}MB rss=${Math.round(memBefore.rss / 1024 / 1024)}MB ` +
+              `ext=${Math.round(memBefore.external / 1024 / 1024)}MB buf=${Math.round(memBefore.arrayBuffers / 1024 / 1024)}MB`,
+          );
 
-        // Retry with exponential backoff on rate limits
-        let embeddings: number[][] = [];
-        let retries = 0;
-        const maxRetries = 5;
-        while (retries < maxRetries) {
-          try {
-            embeddings = await embeddingProvider.embedBatch(batchTexts);
-            break;
-          } catch (err: any) {
-            const errMsg = err?.message || String(err);
-            // Check for rate limit (429) errors
-            if (errMsg.includes("429") || errMsg.includes("rate_limit") || errMsg.includes("Rate limit")) {
-              // Extract wait time from error message if present
-              const waitMatch = errMsg.match(/try again in (\d+\.?\d*)/i);
-              const waitSecs = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 1 : Math.pow(2, retries) * 5;
-              log.warn(`Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}`);
-              await new Promise(resolve => setTimeout(resolve, waitSecs * 1000));
-              retries++;
-            } else {
-              throw err; // Non-rate-limit error, propagate
+          // Retry with exponential backoff on rate limits
+          let embeddings: number[][] = [];
+          let retries = 0;
+          const maxRetries = 5;
+          while (retries < maxRetries) {
+            try {
+              const t0Embed = performance.now();
+              embeddings = await embeddingProvider.embedBatch(batchTexts);
+              const embedMs = (performance.now() - t0Embed).toFixed(0);
+              const memAfterEmbed = process.memoryUsage();
+              log.info(
+                `Batch ${batchNum} embedBatch returned ${embeddings.length} vectors in ${embedMs}ms | ` +
+                  `heap=${Math.round(memAfterEmbed.heapUsed / 1024 / 1024)}MB rss=${Math.round(memAfterEmbed.rss / 1024 / 1024)}MB ` +
+                  `ext=${Math.round(memAfterEmbed.external / 1024 / 1024)}MB buf=${Math.round(memAfterEmbed.arrayBuffers / 1024 / 1024)}MB`,
+              );
+              break;
+            } catch (err: any) {
+              const errMsg = err?.message || String(err);
+              // Check for rate limit (429) errors
+              if (errMsg.includes("429") || errMsg.includes("rate_limit") || errMsg.includes("Rate limit")) {
+                // Extract wait time from error message if present
+                const waitMatch = errMsg.match(/try again in (\d+\.?\d*)/i);
+                const waitSecs = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 1 : 2 ** retries * 5;
+                log.warn(`Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}`);
+                await new Promise((resolve) => setTimeout(resolve, waitSecs * 1000));
+                retries++;
+              } else {
+                throw err; // Non-rate-limit error, propagate
+              }
             }
           }
-        }
-        if (retries >= maxRetries) {
-          throw new Error(`Failed after ${maxRetries} rate limit retries`);
-        }
-
-        if (embeddings.length !== batchEntries.length) {
-          log.warn(`Embedding batch size mismatch: expected ${batchEntries.length}, got ${embeddings.length}`);
-        }
-
-        batchStart = batchEnd;
-
-        const t0 = performance.now();
-        for (let j = 0; j < batchEntries.length; j++) {
-          const { entry } = batchEntries[j];
-          const embedding = embeddings[j];
-          if (!embedding || embedding.length !== dims) {
-            log.warn(`Skipping entry ${entry.id}: expected ${dims}-dim embedding, got ${embedding?.length ?? 0}`);
-            continue;
+          if (retries >= maxRetries) {
+            throw new Error(`Failed after ${maxRetries} rate limit retries`);
           }
-          // Re-check after await — concurrent caller may have added this ID
-          if (existingIds.has(entry.id)) continue;
-          const full: VectorEntry = { ...entry, embedding };
-          const label = nextLabel;
-          try {
-            index.add(label, new Float32Array(embedding));
-          } catch (err: any) {
-            log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
-            continue;
-          }
-          nextLabel++;
-          metadata.set(label, full);
-          idToLabel.set(entry.id, label);
-          existingIds.add(entry.id);
-          addedCount++;
-        }
-        const indexMs = (performance.now() - t0).toFixed(1);
-        log.info(`Batch ${batchNum} indexed ${batchEntries.length} vectors into HNSW in ${indexMs}ms`);
-      }
 
-      log.info(`addEntriesBatch complete: ${addedCount} added, index size=${metadata.size}`);
-      if (addedCount > 0) saveIndex();
-      return addedCount;
+          if (embeddings.length !== batchEntries.length) {
+            log.warn(`Embedding batch size mismatch: expected ${batchEntries.length}, got ${embeddings.length}`);
+          }
+
+          batchStart = batchEnd;
+
+          const t0 = performance.now();
+          let batchAdded = 0;
+          for (let j = 0; j < batchEntries.length; j++) {
+            const { entry } = batchEntries[j];
+            const embedding = embeddings[j];
+            if (!embedding || embedding.length !== dims) {
+              log.warn(`Skipping entry ${entry.id}: expected ${dims}-dim embedding, got ${embedding?.length ?? 0}`);
+              continue;
+            }
+            // Re-check after await — concurrent caller may have added this ID
+            if (existingIds.has(entry.id)) continue;
+            const full: VectorEntry = { ...entry, embedding };
+            const label = nextLabel;
+            try {
+              index.add(label, new Float32Array(embedding));
+            } catch (err: any) {
+              log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
+              continue;
+            }
+            nextLabel++;
+            metadata.set(label, full);
+            idToLabel.set(entry.id, label);
+            existingIds.add(entry.id);
+            addedCount++;
+            batchAdded++;
+          }
+          const indexMs = (performance.now() - t0).toFixed(1);
+          const memAfterIndex = process.memoryUsage();
+          log.info(
+            `Batch ${batchNum} indexed ${batchAdded}/${batchEntries.length} vectors into HNSW in ${indexMs}ms | ` +
+              `total=${metadata.size} heap=${Math.round(memAfterIndex.heapUsed / 1024 / 1024)}MB ` +
+              `rss=${Math.round(memAfterIndex.rss / 1024 / 1024)}MB ext=${Math.round(memAfterIndex.external / 1024 / 1024)}MB ` +
+              `buf=${Math.round(memAfterIndex.arrayBuffers / 1024 / 1024)}MB`,
+          );
+        }
+
+        const memFinal = process.memoryUsage();
+        log.info(
+          `addEntriesBatch complete: ${addedCount} added, index size=${metadata.size}, capacity=${index.capacity()} | ` +
+            `heap=${Math.round(memFinal.heapUsed / 1024 / 1024)}MB rss=${Math.round(memFinal.rss / 1024 / 1024)}MB ` +
+            `ext=${Math.round(memFinal.external / 1024 / 1024)}MB buf=${Math.round(memFinal.arrayBuffers / 1024 / 1024)}MB`,
+        );
+        if (addedCount > 0) {
+          log.info(`Saving HNSW index...`);
+          saveIndex();
+          const memSaved = process.memoryUsage();
+          log.info(
+            `Post-save: rss=${Math.round(memSaved.rss / 1024 / 1024)}MB ` +
+              `ext=${Math.round(memSaved.external / 1024 / 1024)}MB`,
+          );
+        }
+        return addedCount;
     },
 
     async close(): Promise<void> {
-      if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+      }
       saveIndex();
       embeddingCache.clear();
       log.info(`Closed: saved index, cleared cache, final size=${metadata.size}`);

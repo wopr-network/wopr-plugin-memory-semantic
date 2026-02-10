@@ -5,8 +5,8 @@
  * with semantic search capabilities without replacing it entirely.
  */
 
-import type { MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 import type { SemanticSearchManager } from "./search.js";
+import type { MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 
 export interface ToolEnhancerOptions {
   config: SemanticMemoryConfig;
@@ -34,7 +34,7 @@ export interface SearchToolResult {
 export async function enhanceSearch(
   input: SearchToolInput,
   options: ToolEnhancerOptions,
-  fallbackSearch?: (query: string, limit: number) => Promise<MemorySearchResult[]>
+  fallbackSearch?: (query: string, limit: number) => Promise<MemorySearchResult[]>,
 ): Promise<SearchToolResult> {
   const { query, maxResults = 10, minScore = 0.35 } = input;
   const { config, searchManager } = options;
@@ -116,7 +116,7 @@ export function createSearchToolHandler(options: ToolEnhancerOptions) {
       const formatted = result.results
         .map(
           (r, i) =>
-            `[${i + 1}] ${r.source}/${r.path}:${r.startLine}-${r.endLine} (score: ${r.score.toFixed(2)})\n${r.snippet}`
+            `[${i + 1}] ${r.source}/${r.path}:${r.startLine}-${r.endLine} (score: ${r.score.toFixed(2)})\n${r.snippet}`,
         )
         .join("\n\n---\n\n");
 

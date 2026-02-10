@@ -4,6 +4,20 @@
  */
 
 import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
+import winston from "winston";
+import { join } from "path";
+import { mkdirSync } from "fs";
+
+const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
+try { mkdirSync(logsDir, { recursive: true }); } catch {}
+
+const log = winston.createLogger({
+  defaultMeta: { service: "ollama-embed" },
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+  transports: [
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
+  ],
+});
 
 // =============================================================================
 // OpenAI Embeddings
@@ -11,9 +25,7 @@ import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
-export async function createOpenAiEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
+export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("No API key found for OpenAI. Set OPENAI_API_KEY environment variable.");
@@ -67,18 +79,11 @@ export async function createOpenAiEmbeddingProvider(
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 
-export async function createGeminiEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
-  const apiKey =
-    config.apiKey ||
-    process.env.GOOGLE_API_KEY?.trim() ||
-    process.env.GEMINI_API_KEY?.trim();
+export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
+  const apiKey = config.apiKey || process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
 
   if (!apiKey) {
-    throw new Error(
-      "No API key found for Gemini. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
-    );
+    throw new Error("No API key found for Gemini. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.");
   }
 
   const baseUrl = (config.baseUrl || DEFAULT_GEMINI_BASE_URL).replace(/\/$/, "");
@@ -171,9 +176,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   return sanitized.map((value) => value / magnitude);
 }
 
-export async function createLocalEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
+export async function createLocalEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const modelPath = config.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = config.local?.modelCacheDir?.trim();
 
@@ -211,7 +214,7 @@ export async function createLocalEmbeddingProvider(
         texts.map(async (text) => {
           const embedding = await ctx.getEmbeddingFor(text);
           return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        })
+        }),
       );
     },
   };
@@ -221,14 +224,8 @@ export async function createLocalEmbeddingProvider(
 // Ollama Embeddings
 // =============================================================================
 
-export async function createOllamaEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
-  const baseUrl = (
-    config.ollama?.baseUrl ||
-    process.env.OLLAMA_HOST ||
-    "http://ollama:11434"
-  ).replace(/\/$/, "");
+export async function createOllamaEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
+  const baseUrl = (config.ollama?.baseUrl || process.env.OLLAMA_HOST || "http://ollama:11434").replace(/\/$/, "");
   const model = config.ollama?.model || "qwen3-embedding:8b";
 
   // Verify Ollama is reachable
@@ -244,6 +241,9 @@ export async function createOllamaEmbeddingProvider(
     model,
     embedQuery: async (text) => {
       if (!text || !text.trim()) return [];
+      const t0 = performance.now();
+      const tokens = Math.round(text.length / 4);
+      log.debug(`embedQuery: ~${tokens} tokens, requesting...`);
 
       const res = await fetch(`${baseUrl}/api/embed`, {
         method: "POST",
@@ -255,30 +255,41 @@ export async function createOllamaEmbeddingProvider(
         throw new Error(`Ollama embed failed (status ${res.status})`);
       }
       const data = (await res.json()) as { embeddings?: number[][] };
+      const ms = (performance.now() - t0).toFixed(0);
       if (!data.embeddings || !Array.isArray(data.embeddings) || data.embeddings.length === 0) {
         throw new Error(`Ollama returned empty embeddings`);
       }
+      log.info(`embedQuery: ${data.embeddings[0].length}-dim in ${ms}ms (~${tokens} tokens)`);
       return sanitizeAndNormalizeEmbedding(data.embeddings[0]);
     },
     embedBatch: async (texts) => {
       if (texts.length === 0) return [];
+      const t0 = performance.now();
+      const totalTokens = texts.reduce((sum, t) => sum + Math.round(t.length / 4), 0);
+      log.info(`embedBatch: ${texts.length} texts, ~${totalTokens} tokens, requesting...`);
+
       // Ollama /api/embed accepts input as string[] natively
       const res = await fetch(`${baseUrl}/api/embed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, input: texts }),
-        signal: AbortSignal.timeout(300_000),
+        signal: AbortSignal.timeout(600_000),
       });
       if (!res.ok) {
+        const ms = (performance.now() - t0).toFixed(0);
+        log.error(`embedBatch: failed status=${res.status} after ${ms}ms`);
         throw new Error(`Ollama batch embed failed (status ${res.status})`);
       }
       const data = (await res.json()) as { embeddings?: number[][] };
+      const ms = (performance.now() - t0).toFixed(0);
       if (!data.embeddings || !Array.isArray(data.embeddings)) {
         throw new Error(`Ollama returned invalid embeddings response`);
       }
       if (data.embeddings.length !== texts.length) {
         throw new Error(`Ollama embedding count mismatch: expected ${texts.length}, got ${data.embeddings.length}`);
       }
+      const dims = data.embeddings[0]?.length ?? 0;
+      log.info(`embedBatch: ${texts.length} texts → ${dims}-dim in ${ms}ms (~${(Number(ms) / texts.length).toFixed(0)}ms/text)`);
       return data.embeddings.map(sanitizeAndNormalizeEmbedding);
     },
   };
@@ -288,9 +299,7 @@ export async function createOllamaEmbeddingProvider(
 // Provider Factory
 // =============================================================================
 
-export async function createEmbeddingProvider(
-  config: SemanticMemoryConfig
-): Promise<EmbeddingProvider> {
+export async function createEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const provider = config.provider;
 
   if (provider === "openai") {

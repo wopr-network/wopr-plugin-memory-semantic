@@ -19,8 +19,8 @@ export interface SemanticMemoryConfig {
 
   // Ollama config
   ollama?: {
-    baseUrl?: string;   // default: http://ollama:11434 (Docker) or http://localhost:11434
-    model?: string;     // default: qwen3-embedding:8b
+    baseUrl?: string; // default: http://ollama:11434 (Docker) or http://localhost:11434
+    model?: string; // default: qwen3-embedding:8b
   };
 
   // Search configuration
@@ -144,7 +144,7 @@ export interface MemorySearchResult {
   endLine: number;
   score: number;
   snippet: string;
-  content: string;      // Full indexed text for retrieval
+  content: string; // Full indexed text for retrieval
   source: string;
 }
 

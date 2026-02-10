@@ -2,8 +2,8 @@
  * Auto-recall logic for injecting relevant memories before agent processing
  */
 
-import type { MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 import type { SemanticSearchManager } from "./search.js";
+import type { MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 
 // =============================================================================
 // Query Extraction
@@ -15,9 +15,7 @@ import type { SemanticSearchManager } from "./search.js";
  */
 export function extractQueryFromMessage(message: string): string {
   // Remove common conversational prefixes
-  let query = message
-    .replace(/^(hey|hi|hello|please|can you|could you|would you|i need|i want)\s+/gi, "")
-    .trim();
+  const query = message.replace(/^(hey|hi|hello|please|can you|could you|would you|i need|i want)\s+/gi, "").trim();
 
   // If message is very short, use as-is
   if (query.length < 50) {
@@ -26,7 +24,9 @@ export function extractQueryFromMessage(message: string): string {
 
   // For longer messages, try to extract the key question/topic
   // Look for question patterns
-  const questionMatch = query.match(/(?:what|how|why|where|when|who|which|can|could|would|should|is|are|do|does)[^.?!]*[?]/i);
+  const questionMatch = query.match(
+    /(?:what|how|why|where|when|who|which|can|could|would|should|is|are|do|does)[^.?!]*[?]/i,
+  );
   if (questionMatch) {
     return questionMatch[0];
   }
@@ -48,10 +48,7 @@ export function extractQueryFromMessage(message: string): string {
 /**
  * Format search results as context to inject into the conversation
  */
-export function formatMemoriesAsContext(
-  memories: MemorySearchResult[],
-  config: SemanticMemoryConfig
-): string {
+export function formatMemoriesAsContext(memories: MemorySearchResult[], config: SemanticMemoryConfig): string {
   if (memories.length === 0) {
     return "";
   }
@@ -86,7 +83,7 @@ export interface RecallResult {
 export async function performAutoRecall(
   message: string,
   searchManager: SemanticSearchManager,
-  config: SemanticMemoryConfig
+  config: SemanticMemoryConfig,
 ): Promise<RecallResult | null> {
   if (!config.autoRecall.enabled) {
     return null;
@@ -124,7 +121,7 @@ export async function performAutoRecall(
  */
 export function injectMemoriesIntoMessages(
   messages: Array<{ role: string; content: string }>,
-  memories: RecallResult
+  memories: RecallResult,
 ): Array<{ role: string; content: string }> {
   if (!memories.context) {
     return messages;
