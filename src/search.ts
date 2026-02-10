@@ -11,6 +11,7 @@ import winston from "winston";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
+try { mkdirSync(logsDir, { recursive: true }); } catch {}
 
 const log = winston.createLogger({
   level: "debug",

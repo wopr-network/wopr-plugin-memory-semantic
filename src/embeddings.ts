@@ -4,6 +4,20 @@
  */
 
 import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
+import winston from "winston";
+import { join } from "path";
+import { mkdirSync } from "fs";
+
+const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
+try { mkdirSync(logsDir, { recursive: true }); } catch {}
+
+const log = winston.createLogger({
+  defaultMeta: { service: "ollama-embed" },
+  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+  transports: [
+    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
+  ],
+});
 
 // =============================================================================
 // OpenAI Embeddings
@@ -227,6 +241,9 @@ export async function createOllamaEmbeddingProvider(config: SemanticMemoryConfig
     model,
     embedQuery: async (text) => {
       if (!text || !text.trim()) return [];
+      const t0 = performance.now();
+      const tokens = Math.round(text.length / 4);
+      log.debug(`embedQuery: ~${tokens} tokens, requesting...`);
 
       const res = await fetch(`${baseUrl}/api/embed`, {
         method: "POST",
@@ -238,13 +255,19 @@ export async function createOllamaEmbeddingProvider(config: SemanticMemoryConfig
         throw new Error(`Ollama embed failed (status ${res.status})`);
       }
       const data = (await res.json()) as { embeddings?: number[][] };
+      const ms = (performance.now() - t0).toFixed(0);
       if (!data.embeddings || !Array.isArray(data.embeddings) || data.embeddings.length === 0) {
         throw new Error(`Ollama returned empty embeddings`);
       }
+      log.info(`embedQuery: ${data.embeddings[0].length}-dim in ${ms}ms (~${tokens} tokens)`);
       return sanitizeAndNormalizeEmbedding(data.embeddings[0]);
     },
     embedBatch: async (texts) => {
       if (texts.length === 0) return [];
+      const t0 = performance.now();
+      const totalTokens = texts.reduce((sum, t) => sum + Math.round(t.length / 4), 0);
+      log.info(`embedBatch: ${texts.length} texts, ~${totalTokens} tokens, requesting...`);
+
       // Ollama /api/embed accepts input as string[] natively
       const res = await fetch(`${baseUrl}/api/embed`, {
         method: "POST",
@@ -253,15 +276,20 @@ export async function createOllamaEmbeddingProvider(config: SemanticMemoryConfig
         signal: AbortSignal.timeout(600_000),
       });
       if (!res.ok) {
+        const ms = (performance.now() - t0).toFixed(0);
+        log.error(`embedBatch: failed status=${res.status} after ${ms}ms`);
         throw new Error(`Ollama batch embed failed (status ${res.status})`);
       }
       const data = (await res.json()) as { embeddings?: number[][] };
+      const ms = (performance.now() - t0).toFixed(0);
       if (!data.embeddings || !Array.isArray(data.embeddings)) {
         throw new Error(`Ollama returned invalid embeddings response`);
       }
       if (data.embeddings.length !== texts.length) {
         throw new Error(`Ollama embedding count mismatch: expected ${texts.length}, got ${data.embeddings.length}`);
       }
+      const dims = data.embeddings[0]?.length ?? 0;
+      log.info(`embedBatch: ${texts.length} texts → ${dims}-dim in ${ms}ms (~${(Number(ms) / texts.length).toFixed(0)}ms/text)`);
       return data.embeddings.map(sanitizeAndNormalizeEmbedding);
     },
   };

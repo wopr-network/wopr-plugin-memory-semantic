@@ -11,6 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import winston from "winston";
 import { extractFromConversation } from "./capture.js";
@@ -21,6 +22,7 @@ import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from
 import { DEFAULT_CONFIG } from "./types.js";
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
+try { mkdirSync(logsDir, { recursive: true }); } catch {}
 
 const log = winston.createLogger({
   level: "debug",
@@ -100,6 +102,12 @@ class EmbeddingQueue {
         log.info(`[queue] processing batch: ${batch.length} entries (${this.queue.length} remaining)`);
         try {
           await this.searchManager.addEntriesBatch(batch);
+          // Persist plugin-originated entries (real-time, capture) to SQLite
+          if (state.api) {
+            for (const entry of batch) {
+              if (entry.persist) persistNewEntryToDb(state.api, entry.entry.id);
+            }
+          }
         } catch (err) {
           log.error(`[queue] batch failed: ${err instanceof Error ? err.message : err}`);
         }
@@ -541,8 +549,9 @@ async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void
   try {
     const ms = state.config.chunking.multiScale;
 
-    // Helper: index a text with optional multi-scale
-    const indexText = async (text: string, baseId: string, source: string) => {
+    // Helper: index a text with optional multi-scale — enqueues through the serialized queue
+    const indexText = (text: string, baseId: string, source: string) => {
+      const entries: PendingEntry[] = [];
       if (ms?.enabled && ms.scales.length > 0) {
         const subChunks = multiScaleChunk(
           text,
@@ -551,15 +560,11 @@ async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void
           ms.scales,
         );
         for (const sc of subChunks) {
-          if (!state.searchManager!.hasEntry(sc.entry.id)) {
-            await state.searchManager!.addEntry(sc.entry, sc.text);
-            persistNewEntryToDb(api, sc.entry.id);
-            indexedCount++;
-          }
+          entries.push({ ...sc, persist: true });
         }
       } else {
-        await state.searchManager!.addEntry(
-          {
+        entries.push({
+          entry: {
             id: baseId,
             path: `session:${sessionName}`,
             startLine: 0,
@@ -569,20 +574,23 @@ async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void
             content: text,
           },
           text,
-        );
-        persistNewEntryToDb(api, baseId);
-        indexedCount++;
+          persist: true,
+        });
+      }
+      if (entries.length > 0) {
+        embeddingQueue.enqueue(entries, `realtime:${source}`);
+        indexedCount += entries.length;
       }
     };
 
     // REAL-TIME INDEXING: Index session content immediately with full text
     // Include session name in hash to prevent cross-session collisions
     if (payload.message && payload.message.trim().length > 10) {
-      await indexText(payload.message, `rt-${contentHash(`${sessionName}:user:${payload.message}`)}`, "realtime-user");
+      indexText(payload.message, `rt-${contentHash(`${sessionName}:user:${payload.message}`)}`, "realtime-user");
     }
 
     if (payload.response.trim().length > 10) {
-      await indexText(
+      indexText(
         payload.response,
         `rt-${contentHash(`${sessionName}:assistant:${payload.response}`)}`,
         "realtime-assistant",
@@ -605,24 +613,22 @@ async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void
       if (candidates.length > 0) {
         api.log.info(`[semantic-memory] Found ${candidates.length} capture candidates`);
 
-        for (const candidate of candidates) {
-          const id = `cap-${contentHash(candidate.text)}`;
-          await state.searchManager.addEntry(
-            {
-              id,
-              path: `session:${sessionName}`,
-              startLine: 0,
-              endLine: 0,
-              source: "auto-capture",
-              snippet: candidate.text.slice(0, 500),
-              content: candidate.text,
-            },
-            candidate.text,
-          );
-          persistNewEntryToDb(api, id);
-        }
+        const captureEntries: PendingEntry[] = candidates.map((candidate) => ({
+          entry: {
+            id: `cap-${contentHash(candidate.text)}`,
+            path: `session:${sessionName}`,
+            startLine: 0,
+            endLine: 0,
+            source: "auto-capture",
+            snippet: candidate.text.slice(0, 500),
+            content: candidate.text,
+          },
+          text: candidate.text,
+          persist: true,
+        }));
+        embeddingQueue.enqueue(captureEntries, `auto-capture(${candidates.length})`);
 
-        api.log.info(`[semantic-memory] Captured ${candidates.length} memories`);
+        api.log.info(`[semantic-memory] Queued ${candidates.length} capture memories`);
       }
     }
   } catch (err) {
@@ -634,7 +640,7 @@ async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void
 // Multi-Scale Chunking
 // =============================================================================
 
-type PendingEntry = { entry: Omit<import("./search.js").VectorEntry, "embedding">; text: string };
+type PendingEntry = { entry: Omit<import("./search.js").VectorEntry, "embedding">; text: string; persist?: boolean };
 
 /**
  * Re-chunk text at multiple granularities for multi-scale vector indexing.
@@ -892,19 +898,22 @@ const plugin: SemanticMemoryPlugin = {
 
     const id = `man-${contentHash(text)}`;
 
-    await state.searchManager.addEntry(
-      {
-        id,
-        path: source,
-        startLine: 0,
-        endLine: 0,
-        source,
-        snippet: text.slice(0, 500),
-        content: text,
-      },
-      text,
+    embeddingQueue.enqueue(
+      [{
+        entry: {
+          id,
+          path: source,
+          startLine: 0,
+          endLine: 0,
+          source,
+          snippet: text.slice(0, 500),
+          content: text,
+        },
+        text,
+        persist: true,
+      }],
+      `manual-capture`,
     );
-    if (state.api) persistNewEntryToDb(state.api, id);
   },
 
   getConfig(): SemanticMemoryConfig {
