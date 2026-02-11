@@ -34,7 +34,7 @@ export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig
 
   const client = new OpenAI({
     apiKey,
-    baseURL: config.baseUrl || undefined,
+    baseURL: config.baseUrl?.replace(/\/$/, "") || undefined,
   });
 
   const embed = async (input: string[]): Promise<number[][]> => {
