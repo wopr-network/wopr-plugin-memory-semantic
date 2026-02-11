@@ -4,6 +4,7 @@
  */
 
 import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
+import OpenAI from "openai";
 import winston from "winston";
 import { join } from "path";
 import { mkdirSync } from "fs";
@@ -20,10 +21,8 @@ const log = winston.createLogger({
 });
 
 // =============================================================================
-// OpenAI Embeddings
+// OpenAI Embeddings (uses openai SDK v6)
 // =============================================================================
-
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
@@ -31,34 +30,19 @@ export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig
     throw new Error("No API key found for OpenAI. Set OPENAI_API_KEY environment variable.");
   }
 
-  const baseUrl = (config.baseUrl || DEFAULT_OPENAI_BASE_URL).replace(/\/$/, "");
   const model = config.model || "text-embedding-3-small";
-  const url = `${baseUrl}/embeddings`;
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
+  const client = new OpenAI({
+    apiKey,
+    baseURL: config.baseUrl?.replace(/\/$/, "") || undefined,
+  });
 
   const embed = async (input: string[]): Promise<number[][]> => {
     if (input.length === 0) return [];
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model, input }),
-    });
+    const response = await client.embeddings.create({ model, input });
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`OpenAI embeddings failed: ${res.status} ${text}`);
-    }
-
-    const payload = (await res.json()) as {
-      data?: Array<{ embedding?: number[] }>;
-    };
-
-    return (payload.data ?? []).map((entry) => entry.embedding ?? []);
+    return response.data.map((entry) => entry.embedding);
   };
 
   return {
