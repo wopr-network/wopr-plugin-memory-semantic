@@ -153,7 +153,7 @@ async function importNodeLlamaCpp(): Promise<{
   return await (Function('return import("node-llama-cpp")')() as Promise<any>);
 }
 
-function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
+export function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
   const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
   if (magnitude < 1e-10) return sanitized;
