@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import winston from "winston";
 import { extractFromConversation } from "./capture.js";
 import { createEmbeddingProvider } from "./embeddings.js";
@@ -20,6 +21,17 @@ import { performAutoRecall } from "./recall.js";
 import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
+
+/**
+ * Extended plugin context — adds the optional `memory` extension that
+ * core exposes for keyword search fallback.  Everything else comes from
+ * the shared @wopr-network/plugin-types package.
+ */
+interface PluginContext extends WOPRPluginContext {
+  memory?: {
+    keywordSearch?(query: string, limit: number): Promise<any[]>;
+  };
+}
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
 try { mkdirSync(logsDir, { recursive: true }); } catch {}
@@ -148,7 +160,7 @@ interface PluginState {
   config: SemanticMemoryConfig;
   embeddingProvider: EmbeddingProvider | null;
   searchManager: SemanticSearchManager | null;
-  api: WoprPluginApi | null;
+  api: PluginContext | null;
   initialized: boolean;
   eventCleanup: Array<() => void>; // event bus unsubscribe functions
 }
@@ -162,59 +174,14 @@ const state: PluginState = {
   eventCleanup: [],
 };
 
-// =============================================================================
-// Plugin API Types (minimal interface with WOPR)
-// =============================================================================
-
-interface WoprPluginApi {
-  // Hook registration - handlers can return mutated payloads (legacy)
-  on(event: string, handler: (...args: any[]) => any): void;
-
-  // Event bus for registering event handlers
-  events: {
-    on(event: string, handler: (...args: any[]) => any): () => void;
-    off(event: string, handler: (...args: any[]) => any): void;
-    emit(event: string, payload: any): Promise<void>;
-  };
-
-  // Extension system - discover APIs from core and other plugins
-  getExtension<T = unknown>(name: string): T | undefined;
-
-  // Memory tools (provided by core — may be undefined)
-  memory?: {
-    keywordSearch?(query: string, limit: number): Promise<any[]>;
-  };
-
-  // Plugin config from WOPR central config (plugins.data[pluginName])
-  getConfig?<T = any>(): T;
-  saveConfig?<T = any>(config: T): Promise<void>;
-
-  // A2A tool registration
-  registerA2AServer?(config: {
-    name: string;
-    description: string;
-    tools: Array<{
-      name: string;
-      description: string;
-      inputSchema: Record<string, any>;
-      handler: (args: any) => Promise<any>;
-    }>;
-  }): void;
-
-  // Logging
-  log: {
-    info(msg: string): void;
-    warn(msg: string): void;
-    error(msg: string): void;
-    debug(msg: string): void;
-  };
-}
+// PluginContext replaced by WOPRPluginContext from @wopr-network/plugin-types
+// (extended locally as PluginContext for the optional memory property)
 
 // =============================================================================
 // SQLite Embedding Persistence (via core's memory:db extension)
 // =============================================================================
 
-function getDb(api: WoprPluginApi): any | null {
+function getDb(api: PluginContext): any | null {
   return api.getExtension<any>("memory:db") ?? null;
 }
 
@@ -232,7 +199,7 @@ function ensureEmbeddingColumn(db: any): void {
 }
 
 /** Open a read-only DB handle — tries core extension first, falls back to direct file open. */
-async function openDbForRead(api: WoprPluginApi): Promise<{ db: any; owned: boolean } | null> {
+async function openDbForRead(api: PluginContext): Promise<{ db: any; owned: boolean } | null> {
   const db = getDb(api);
   if (db) return { db, owned: false };
 
@@ -254,7 +221,7 @@ async function openDbForRead(api: WoprPluginApi): Promise<{ db: any; owned: bool
  *  map and to identify chunks that need (re-)embedding during bootstrap.
  *  Embeddings are NOT loaded from SQLite (the HNSW binary is the vector source
  *  of truth), so we return a dummy empty embedding. */
-async function loadChunkMetadata(api: WoprPluginApi): Promise<Map<string, import("./search.js").VectorEntry>> {
+async function loadChunkMetadata(api: PluginContext): Promise<Map<string, import("./search.js").VectorEntry>> {
   const handle = await openDbForRead(api);
   if (!handle) return new Map();
 
@@ -295,7 +262,7 @@ async function loadChunkMetadata(api: WoprPluginApi): Promise<Map<string, import
 
 /** Derive path for the persisted HNSW binary.
  *  Tries the DB handle first, falls back to WOPR_HOME convention. */
-function getHnswPath(api: WoprPluginApi): string | undefined {
+function getHnswPath(api: PluginContext): string | undefined {
   // Try DB handle (available after core memory init)
   const db = getDb(api);
   if (db) {
@@ -310,7 +277,7 @@ function getHnswPath(api: WoprPluginApi): string | undefined {
   return undefined;
 }
 
-function storeEmbeddingsToDb(api: WoprPluginApi, embeddings: Array<{ id: string; embedding: number[] }>): void {
+function storeEmbeddingsToDb(api: PluginContext, embeddings: Array<{ id: string; embedding: number[] }>): void {
   const db = getDb(api);
   if (!db || embeddings.length === 0 || typeof db.prepare !== "function" || typeof db.exec !== "function") return;
   ensureEmbeddingColumn(db);
@@ -332,7 +299,7 @@ function storeEmbeddingsToDb(api: WoprPluginApi, embeddings: Array<{ id: string;
 }
 
 /** INSERT a plugin-originated entry (real-time, capture) into chunks with its embedding */
-function persistNewEntryToDb(api: WoprPluginApi, id: string): void {
+function persistNewEntryToDb(api: PluginContext, id: string): void {
   const entry = state.searchManager?.getEntry(id);
   if (!entry || !state.embeddingProvider) return;
   if (!entry.embedding || entry.embedding.length === 0) return;
@@ -373,7 +340,7 @@ function persistNewEntryToDb(api: WoprPluginApi, id: string): void {
 // =============================================================================
 
 let initInProgress = false;
-async function initialize(api: WoprPluginApi, userConfig?: Partial<SemanticMemoryConfig>) {
+async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemoryConfig>) {
   if (state.initialized || initInProgress) return;
   initInProgress = true;
 
@@ -502,7 +469,7 @@ async function bootstrapEmbeddings(chunkMetadata: Map<string, import("./search.j
 /**
  * Before inject hook - auto-recall relevant memories
  */
-async function handleBeforeInject(api: WoprPluginApi, payload: any): Promise<void> {
+async function handleBeforeInject(api: PluginContext, payload: any): Promise<void> {
   if (!state.initialized || !state.searchManager || !state.config.autoRecall.enabled) {
     return;
   }
@@ -533,7 +500,7 @@ async function handleBeforeInject(api: WoprPluginApi, payload: any): Promise<voi
  * After inject hook - real-time indexing of ALL session content
  * Payload is SessionResponseEvent: { session, message, response, from }
  */
-async function handleAfterInject(api: WoprPluginApi, payload: any): Promise<void> {
+async function handleAfterInject(api: PluginContext, payload: any): Promise<void> {
   if (!state.initialized || !state.searchManager) {
     return;
   }
@@ -734,7 +701,7 @@ export interface SemanticMemoryPlugin {
   description: string;
   version: string;
 
-  init(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>): Promise<void>;
+  init(api: PluginContext, config?: Partial<SemanticMemoryConfig>): Promise<void>;
   shutdown(): Promise<void>;
 
   // Public API
@@ -749,7 +716,7 @@ const plugin: SemanticMemoryPlugin = {
   description: "Semantic memory search with embeddings, auto-recall, and auto-capture",
   version: "1.0.0",
 
-  async init(api: WoprPluginApi, config?: Partial<SemanticMemoryConfig>) {
+  async init(api: PluginContext, config?: Partial<SemanticMemoryConfig>) {
     // Override api.log to use our file-backed winston logger
     api.log = {
       info: (msg: string) => log.info(msg),
