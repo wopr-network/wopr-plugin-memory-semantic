@@ -1,5 +1,5 @@
 {
-  "name": "wopr-plugin-memory-semantic",
+  "name": "@wopr-network/wopr-plugin-memory-semantic",
   "version": "1.0.0",
   "description": "Semantic memory search with embeddings, auto-recall, and auto-capture for WOPR",
   "type": "module",
@@ -11,7 +11,8 @@
     "lint:fix": "biome check --fix src/",
     "format": "biome format --write src/",
     "check": "biome check --fix src/ && tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@wopr-network/plugin-types": "^0.1.0",
@@ -46,5 +47,11 @@
     "plugin": {
       "entry": "dist/index.js"
     }
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ]
 }
