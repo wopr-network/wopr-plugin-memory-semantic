@@ -11,7 +11,9 @@ import winston from "winston";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
-try { mkdirSync(logsDir, { recursive: true }); } catch {}
+try {
+  mkdirSync(logsDir, { recursive: true });
+} catch {}
 
 const log = winston.createLogger({
   level: "debug",
@@ -562,135 +564,135 @@ export async function createSemanticSearchManager(
       });
       if (newEntries.length === 0) return 0;
 
-        const texts = newEntries.map((e) => e.text);
+      const texts = newEntries.map((e) => e.text);
 
-        // Local models (ollama/local) are much slower than cloud APIs — use smaller batches
-        const isLocal = embeddingProvider.id === "ollama" || embeddingProvider.id === "local";
-        const MAX_TOKENS_PER_REQUEST = isLocal ? 8000 : 280000;
-        const CHARS_PER_TOKEN = 4;
-        let addedCount = 0;
+      // Local models (ollama/local) are much slower than cloud APIs — use smaller batches
+      const isLocal = embeddingProvider.id === "ollama" || embeddingProvider.id === "local";
+      const MAX_TOKENS_PER_REQUEST = isLocal ? 8000 : 280000;
+      const CHARS_PER_TOKEN = 4;
+      let addedCount = 0;
 
-        // Build batches based on actual token estimates
-        let batchStart = 0;
-        let batchNum = 0;
-        while (batchStart < texts.length) {
-          let batchTokens = 0;
-          let batchEnd = batchStart;
+      // Build batches based on actual token estimates
+      let batchStart = 0;
+      let batchNum = 0;
+      while (batchStart < texts.length) {
+        let batchTokens = 0;
+        let batchEnd = batchStart;
 
-          // Add texts until we hit the token limit
-          while (batchEnd < texts.length) {
-            const textTokens = Math.ceil(texts[batchEnd].length / CHARS_PER_TOKEN);
-            if (batchTokens + textTokens > MAX_TOKENS_PER_REQUEST && batchEnd > batchStart) {
-              break; // This text would exceed limit, stop here
-            }
-            batchTokens += textTokens;
-            batchEnd++;
+        // Add texts until we hit the token limit
+        while (batchEnd < texts.length) {
+          const textTokens = Math.ceil(texts[batchEnd].length / CHARS_PER_TOKEN);
+          if (batchTokens + textTokens > MAX_TOKENS_PER_REQUEST && batchEnd > batchStart) {
+            break; // This text would exceed limit, stop here
           }
-
-          const batchTexts = texts.slice(batchStart, batchEnd);
-          const batchEntries = newEntries.slice(batchStart, batchEnd);
-          batchNum++;
-
-          const memBefore = process.memoryUsage();
-          log.info(
-            `Embedding batch ${batchNum}: ${batchTexts.length} chunks, ~${batchTokens} tokens | ` +
-              `heap=${Math.round(memBefore.heapUsed / 1024 / 1024)}MB rss=${Math.round(memBefore.rss / 1024 / 1024)}MB ` +
-              `ext=${Math.round(memBefore.external / 1024 / 1024)}MB buf=${Math.round(memBefore.arrayBuffers / 1024 / 1024)}MB`,
-          );
-
-          // Retry with exponential backoff on rate limits
-          let embeddings: number[][] = [];
-          let retries = 0;
-          const maxRetries = 5;
-          while (retries < maxRetries) {
-            try {
-              const t0Embed = performance.now();
-              embeddings = await embeddingProvider.embedBatch(batchTexts);
-              const embedMs = (performance.now() - t0Embed).toFixed(0);
-              const memAfterEmbed = process.memoryUsage();
-              log.info(
-                `Batch ${batchNum} embedBatch returned ${embeddings.length} vectors in ${embedMs}ms | ` +
-                  `heap=${Math.round(memAfterEmbed.heapUsed / 1024 / 1024)}MB rss=${Math.round(memAfterEmbed.rss / 1024 / 1024)}MB ` +
-                  `ext=${Math.round(memAfterEmbed.external / 1024 / 1024)}MB buf=${Math.round(memAfterEmbed.arrayBuffers / 1024 / 1024)}MB`,
-              );
-              break;
-            } catch (err: any) {
-              const errMsg = err?.message || String(err);
-              // Check for rate limit (429) errors
-              if (errMsg.includes("429") || errMsg.includes("rate_limit") || errMsg.includes("Rate limit")) {
-                // Extract wait time from error message if present
-                const waitMatch = errMsg.match(/try again in (\d+\.?\d*)/i);
-                const waitSecs = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 1 : 2 ** retries * 5;
-                log.warn(`Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}`);
-                await new Promise((resolve) => setTimeout(resolve, waitSecs * 1000));
-                retries++;
-              } else {
-                throw err; // Non-rate-limit error, propagate
-              }
-            }
-          }
-          if (retries >= maxRetries) {
-            throw new Error(`Failed after ${maxRetries} rate limit retries`);
-          }
-
-          if (embeddings.length !== batchEntries.length) {
-            log.warn(`Embedding batch size mismatch: expected ${batchEntries.length}, got ${embeddings.length}`);
-          }
-
-          batchStart = batchEnd;
-
-          const t0 = performance.now();
-          let batchAdded = 0;
-          for (let j = 0; j < batchEntries.length; j++) {
-            const { entry } = batchEntries[j];
-            const embedding = embeddings[j];
-            if (!embedding || embedding.length !== dims) {
-              log.warn(`Skipping entry ${entry.id}: expected ${dims}-dim embedding, got ${embedding?.length ?? 0}`);
-              continue;
-            }
-            // Re-check after await — concurrent caller may have added this ID
-            if (existingIds.has(entry.id)) continue;
-            const full: VectorEntry = { ...entry, embedding };
-            const label = nextLabel;
-            try {
-              index.add(label, new Float32Array(embedding));
-            } catch (err: any) {
-              log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
-              continue;
-            }
-            nextLabel++;
-            metadata.set(label, full);
-            idToLabel.set(entry.id, label);
-            existingIds.add(entry.id);
-            addedCount++;
-            batchAdded++;
-          }
-          const indexMs = (performance.now() - t0).toFixed(1);
-          const memAfterIndex = process.memoryUsage();
-          log.info(
-            `Batch ${batchNum} indexed ${batchAdded}/${batchEntries.length} vectors into HNSW in ${indexMs}ms | ` +
-              `total=${metadata.size} heap=${Math.round(memAfterIndex.heapUsed / 1024 / 1024)}MB ` +
-              `rss=${Math.round(memAfterIndex.rss / 1024 / 1024)}MB ext=${Math.round(memAfterIndex.external / 1024 / 1024)}MB ` +
-              `buf=${Math.round(memAfterIndex.arrayBuffers / 1024 / 1024)}MB`,
-          );
+          batchTokens += textTokens;
+          batchEnd++;
         }
 
-        const memFinal = process.memoryUsage();
+        const batchTexts = texts.slice(batchStart, batchEnd);
+        const batchEntries = newEntries.slice(batchStart, batchEnd);
+        batchNum++;
+
+        const memBefore = process.memoryUsage();
         log.info(
-          `addEntriesBatch complete: ${addedCount} added, index size=${metadata.size}, capacity=${index.capacity()} | ` +
-            `heap=${Math.round(memFinal.heapUsed / 1024 / 1024)}MB rss=${Math.round(memFinal.rss / 1024 / 1024)}MB ` +
-            `ext=${Math.round(memFinal.external / 1024 / 1024)}MB buf=${Math.round(memFinal.arrayBuffers / 1024 / 1024)}MB`,
+          `Embedding batch ${batchNum}: ${batchTexts.length} chunks, ~${batchTokens} tokens | ` +
+            `heap=${Math.round(memBefore.heapUsed / 1024 / 1024)}MB rss=${Math.round(memBefore.rss / 1024 / 1024)}MB ` +
+            `ext=${Math.round(memBefore.external / 1024 / 1024)}MB buf=${Math.round(memBefore.arrayBuffers / 1024 / 1024)}MB`,
         );
-        if (addedCount > 0) {
-          log.info(`Saving HNSW index...`);
-          saveIndex();
-          const memSaved = process.memoryUsage();
-          log.info(
-            `Post-save: rss=${Math.round(memSaved.rss / 1024 / 1024)}MB ` +
-              `ext=${Math.round(memSaved.external / 1024 / 1024)}MB`,
-          );
+
+        // Retry with exponential backoff on rate limits
+        let embeddings: number[][] = [];
+        let retries = 0;
+        const maxRetries = 5;
+        while (retries < maxRetries) {
+          try {
+            const t0Embed = performance.now();
+            embeddings = await embeddingProvider.embedBatch(batchTexts);
+            const embedMs = (performance.now() - t0Embed).toFixed(0);
+            const memAfterEmbed = process.memoryUsage();
+            log.info(
+              `Batch ${batchNum} embedBatch returned ${embeddings.length} vectors in ${embedMs}ms | ` +
+                `heap=${Math.round(memAfterEmbed.heapUsed / 1024 / 1024)}MB rss=${Math.round(memAfterEmbed.rss / 1024 / 1024)}MB ` +
+                `ext=${Math.round(memAfterEmbed.external / 1024 / 1024)}MB buf=${Math.round(memAfterEmbed.arrayBuffers / 1024 / 1024)}MB`,
+            );
+            break;
+          } catch (err: any) {
+            const errMsg = err?.message || String(err);
+            // Check for rate limit (429) errors
+            if (errMsg.includes("429") || errMsg.includes("rate_limit") || errMsg.includes("Rate limit")) {
+              // Extract wait time from error message if present
+              const waitMatch = errMsg.match(/try again in (\d+\.?\d*)/i);
+              const waitSecs = waitMatch ? Math.ceil(parseFloat(waitMatch[1])) + 1 : 2 ** retries * 5;
+              log.warn(`Rate limited, waiting ${waitSecs}s before retry ${retries + 1}/${maxRetries}`);
+              await new Promise((resolve) => setTimeout(resolve, waitSecs * 1000));
+              retries++;
+            } else {
+              throw err; // Non-rate-limit error, propagate
+            }
+          }
         }
-        return addedCount;
+        if (retries >= maxRetries) {
+          throw new Error(`Failed after ${maxRetries} rate limit retries`);
+        }
+
+        if (embeddings.length !== batchEntries.length) {
+          log.warn(`Embedding batch size mismatch: expected ${batchEntries.length}, got ${embeddings.length}`);
+        }
+
+        batchStart = batchEnd;
+
+        const t0 = performance.now();
+        let batchAdded = 0;
+        for (let j = 0; j < batchEntries.length; j++) {
+          const { entry } = batchEntries[j];
+          const embedding = embeddings[j];
+          if (!embedding || embedding.length !== dims) {
+            log.warn(`Skipping entry ${entry.id}: expected ${dims}-dim embedding, got ${embedding?.length ?? 0}`);
+            continue;
+          }
+          // Re-check after await — concurrent caller may have added this ID
+          if (existingIds.has(entry.id)) continue;
+          const full: VectorEntry = { ...entry, embedding };
+          const label = nextLabel;
+          try {
+            index.add(label, new Float32Array(embedding));
+          } catch (err: any) {
+            log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
+            continue;
+          }
+          nextLabel++;
+          metadata.set(label, full);
+          idToLabel.set(entry.id, label);
+          existingIds.add(entry.id);
+          addedCount++;
+          batchAdded++;
+        }
+        const indexMs = (performance.now() - t0).toFixed(1);
+        const memAfterIndex = process.memoryUsage();
+        log.info(
+          `Batch ${batchNum} indexed ${batchAdded}/${batchEntries.length} vectors into HNSW in ${indexMs}ms | ` +
+            `total=${metadata.size} heap=${Math.round(memAfterIndex.heapUsed / 1024 / 1024)}MB ` +
+            `rss=${Math.round(memAfterIndex.rss / 1024 / 1024)}MB ext=${Math.round(memAfterIndex.external / 1024 / 1024)}MB ` +
+            `buf=${Math.round(memAfterIndex.arrayBuffers / 1024 / 1024)}MB`,
+        );
+      }
+
+      const memFinal = process.memoryUsage();
+      log.info(
+        `addEntriesBatch complete: ${addedCount} added, index size=${metadata.size}, capacity=${index.capacity()} | ` +
+          `heap=${Math.round(memFinal.heapUsed / 1024 / 1024)}MB rss=${Math.round(memFinal.rss / 1024 / 1024)}MB ` +
+          `ext=${Math.round(memFinal.external / 1024 / 1024)}MB buf=${Math.round(memFinal.arrayBuffers / 1024 / 1024)}MB`,
+      );
+      if (addedCount > 0) {
+        log.info(`Saving HNSW index...`);
+        saveIndex();
+        const memSaved = process.memoryUsage();
+        log.info(
+          `Post-save: rss=${Math.round(memSaved.rss / 1024 / 1024)}MB ` +
+            `ext=${Math.round(memSaved.external / 1024 / 1024)}MB`,
+        );
+      }
+      return addedCount;
     },
 
     async close(): Promise<void> {

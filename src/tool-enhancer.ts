@@ -37,7 +37,7 @@ export async function enhanceSearch(
   fallbackSearch?: (query: string, limit: number) => Promise<MemorySearchResult[]>,
 ): Promise<SearchToolResult> {
   const { query, maxResults = 10, minScore = 0.35 } = input;
-  const { config, searchManager } = options;
+  const { searchManager } = options;
 
   try {
     // Perform semantic search
