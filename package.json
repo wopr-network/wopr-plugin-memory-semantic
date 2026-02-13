@@ -46,7 +46,12 @@
   "wopr": {
     "plugin": {
       "entry": "dist/index.js"
-    }
+    },
+    "webmcpTools": [
+      { "name": "searchMemory", "description": "Search the bot's semantic memory for relevant information" },
+      { "name": "listMemoryCollections", "description": "List available memory collections" },
+      { "name": "getMemoryStats", "description": "Get memory index statistics" }
+    ]
   },
   "publishConfig": {
     "access": "public"

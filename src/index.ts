@@ -886,3 +886,6 @@ export default plugin;
 // Re-export types
 export type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
 export { DEFAULT_CONFIG } from "./types.js";
+export type { AuthContext, WebMCPHandler, WebMCPRegistryLike, WebMCPTool, WebMCPToolDeclaration } from "./webmcp.js";
+// Re-export WebMCP tools for browser-side registration
+export { registerMemoryTools, unregisterMemoryTools, WEBMCP_MANIFEST } from "./webmcp.js";
