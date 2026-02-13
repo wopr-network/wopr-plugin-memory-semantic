@@ -109,7 +109,7 @@ describe("registerMemoryTools", () => {
         expect.objectContaining({ method: "POST" }),
       );
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.message).toContain("authentication patterns");
+      expect(body.message).toContain('"authentication patterns"');
       expect(body.message).toContain("memory_search");
       expect(body.from).toBe("webmcp");
       expect(result).toEqual({
@@ -143,6 +143,19 @@ describe("registerMemoryTools", () => {
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.message).toContain("maxResults 10");
+    });
+
+    it("should cap limit at 100", async () => {
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ session: "default", response: "ok" }),
+      );
+      registerMemoryTools(registry, API_BASE);
+
+      const tool = getTool(registry, "searchMemory");
+      await tool.handler({ query: "test", limit: 500 }, {});
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.message).toContain("maxResults 100");
     });
 
     it("should throw when query parameter is missing", async () => {
@@ -366,6 +379,55 @@ describe("registerMemoryTools", () => {
         expect.any(Object),
       );
     });
+  });
+});
+
+describe("daemonRequest timeout", () => {
+  let registry: ReturnType<typeof createTestRegistry>;
+
+  beforeEach(() => {
+    registry = createTestRegistry();
+    mockFetch.mockReset();
+  });
+
+  it("should pass AbortSignal.timeout to fetch", async () => {
+    mockFetch.mockResolvedValue(
+      mockJsonResponse({ session: "default", response: "ok" }),
+    );
+    registerMemoryTools(registry, "/api");
+
+    const tool = registry.get("searchMemory")!;
+    await tool.handler({ query: "test" }, {});
+
+    const fetchOptions = mockFetch.mock.calls[0][1];
+    expect(fetchOptions.signal).toBeDefined();
+  });
+});
+
+describe("listMemoryCollections plugin filtering", () => {
+  let registry: ReturnType<typeof createTestRegistry>;
+
+  beforeEach(() => {
+    registry = createTestRegistry();
+    mockFetch.mockReset();
+  });
+
+  it("should only match plugins whose name starts with 'memory-'", async () => {
+    const plugins = {
+      plugins: [
+        { name: "memory-semantic", description: "Semantic memory", enabled: true, loaded: true },
+        { name: "custom-memory-plugin", description: "Custom", enabled: true, loaded: true },
+        { name: "semantic-search", description: "Semantic", enabled: true, loaded: true },
+      ],
+    };
+    mockFetch.mockResolvedValue(mockJsonResponse(plugins));
+    registerMemoryTools(registry, "/api");
+
+    const tool = registry.get("listMemoryCollections")!;
+    const result = (await tool.handler({}, {})) as { collections: Array<{ name: string }> };
+
+    expect(result.collections).toHaveLength(1);
+    expect(result.collections[0].name).toBe("memory-semantic");
   });
 });
 

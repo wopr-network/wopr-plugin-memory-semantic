@@ -68,6 +68,7 @@ async function daemonRequest<T>(
   const res = await fetch(`${apiBase}${path}`, {
     ...options,
     headers,
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Request failed" }));
@@ -136,7 +137,7 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
       if (!query) {
         throw new Error("Parameter 'query' is required");
       }
-      const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 10;
+      const limit = typeof params.limit === "number" && params.limit > 0 ? Math.min(params.limit, 100) : 10;
 
       // Call the daemon's session inject endpoint with a structured search request.
       // The bot invokes the memory_search tool and returns results.
@@ -146,7 +147,7 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
       }>(apiBase, "/sessions/default/inject", auth, {
         method: "POST",
         body: JSON.stringify({
-          message: `Use the memory_search tool with query "${query}" and maxResults ${limit}. Return only the raw search results as JSON, no commentary.`,
+          message: `Use the memory_search tool with query ${JSON.stringify(query)} and maxResults ${limit}. Return only the raw search results as JSON, no commentary.`,
           from: "webmcp",
         }),
       });
@@ -175,7 +176,7 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
       }>(apiBase, "/plugins", auth);
 
       const memoryPlugins = data.plugins.filter(
-        (p) => p.loaded && (p.name.includes("memory") || p.name.includes("semantic")),
+        (p) => p.loaded && p.name.startsWith("memory-"),
       );
 
       return {
