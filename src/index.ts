@@ -34,7 +34,9 @@ interface PluginContext extends WOPRPluginContext {
 }
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
-try { mkdirSync(logsDir, { recursive: true }); } catch {}
+try {
+  mkdirSync(logsDir, { recursive: true });
+} catch {}
 
 const log = winston.createLogger({
   level: "debug",
@@ -66,7 +68,9 @@ class EmbeddingQueue {
   private _bootstrapping = false;
   private searchManager: SemanticSearchManager | null = null;
 
-  get bootstrapping(): boolean { return this._bootstrapping; }
+  get bootstrapping(): boolean {
+    return this._bootstrapping;
+  }
 
   attach(sm: SemanticSearchManager): void {
     this.searchManager = sm;
@@ -76,7 +80,7 @@ class EmbeddingQueue {
   enqueue(entries: PendingEntry[], source: string): void {
     if (!this.searchManager) return;
     // Deduplicate against already-indexed AND against entries already in queue
-    const queuedIds = new Set(this.queue.map(e => e.entry.id));
+    const queuedIds = new Set(this.queue.map((e) => e.entry.id));
     let added = 0;
     for (const entry of entries) {
       if (this.searchManager.hasEntry(entry.entry.id)) continue;
@@ -275,27 +279,6 @@ function getHnswPath(api: PluginContext): string | undefined {
   const home = process.env.WOPR_HOME;
   if (home) return `${home}/memory/index.sqlite.hnsw`;
   return undefined;
-}
-
-function storeEmbeddingsToDb(api: PluginContext, embeddings: Array<{ id: string; embedding: number[] }>): void {
-  const db = getDb(api);
-  if (!db || embeddings.length === 0 || typeof db.prepare !== "function" || typeof db.exec !== "function") return;
-  ensureEmbeddingColumn(db);
-
-  try {
-    db.exec("BEGIN");
-    const update = db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`);
-    for (const entry of embeddings) {
-      const blob = Buffer.from(new Float32Array(entry.embedding).buffer);
-      update.run(blob, entry.id);
-    }
-    db.exec("COMMIT");
-  } catch (err) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {}
-    log.error(`Failed to store embeddings: ${err}`);
-  }
 }
 
 /** INSERT a plugin-originated entry (real-time, capture) into chunks with its embedding */
@@ -771,8 +754,14 @@ const plugin: SemanticMemoryPlugin = {
 
           if (ms?.enabled && ms.scales.length > 0) {
             const subChunks = multiScaleChunk(
-              chunk.text, id,
-              { path: change.absPath || change.path, startLine: chunk.startLine, endLine: chunk.endLine, source: change.source || "memory" },
+              chunk.text,
+              id,
+              {
+                path: change.absPath || change.path,
+                startLine: chunk.startLine,
+                endLine: chunk.endLine,
+                source: change.source || "memory",
+              },
               ms.scales,
             );
             for (const sc of subChunks) entries.push(sc);
@@ -839,7 +828,9 @@ const plugin: SemanticMemoryPlugin = {
 
     // Unsubscribe all event handlers
     for (const unsub of state.eventCleanup) {
-      try { unsub(); } catch {}
+      try {
+        unsub();
+      } catch {}
     }
     state.eventCleanup = [];
 
@@ -866,19 +857,21 @@ const plugin: SemanticMemoryPlugin = {
     const id = `man-${contentHash(text)}`;
 
     embeddingQueue.enqueue(
-      [{
-        entry: {
-          id,
-          path: source,
-          startLine: 0,
-          endLine: 0,
-          source,
-          snippet: text.slice(0, 500),
-          content: text,
+      [
+        {
+          entry: {
+            id,
+            path: source,
+            startLine: 0,
+            endLine: 0,
+            source,
+            snippet: text.slice(0, 500),
+            content: text,
+          },
+          text,
+          persist: true,
         },
-        text,
-        persist: true,
-      }],
+      ],
       `manual-capture`,
     );
   },
