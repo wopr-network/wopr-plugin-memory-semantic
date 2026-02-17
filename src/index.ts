@@ -15,8 +15,13 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import winston from "winston";
+import { registerMemoryTools } from "./a2a-tools.js";
 import { extractFromConversation } from "./capture.js";
+import { MemoryIndexManager } from "./core-memory/manager.js";
+import { createSessionDestroyHandler } from "./core-memory/session-hook.js";
+import { startWatcher, stopWatcher } from "./core-memory/watcher.js";
 import { createEmbeddingProvider } from "./embeddings.js";
+import { memoryPluginSchema } from "./memory-schema.js";
 import { performAutoRecall } from "./recall.js";
 import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
@@ -24,13 +29,14 @@ import { DEFAULT_CONFIG } from "./types.js";
 
 /**
  * Extended plugin context — adds the optional `memory` extension that
- * core exposes for keyword search fallback.  Everything else comes from
- * the shared @wopr-network/plugin-types package.
+ * core exposes for keyword search fallback and `registerTool`.
+ * Everything else (including `storage`) comes from @wopr-network/plugin-types.
  */
 interface PluginContext extends WOPRPluginContext {
   memory?: {
     keywordSearch?(query: string, limit: number): Promise<any[]>;
   };
+  registerTool?(tool: any): void;
 }
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
@@ -164,6 +170,7 @@ interface PluginState {
   config: SemanticMemoryConfig;
   embeddingProvider: EmbeddingProvider | null;
   searchManager: SemanticSearchManager | null;
+  memoryManager: MemoryIndexManager | null;
   api: PluginContext | null;
   initialized: boolean;
   eventCleanup: Array<() => void>; // event bus unsubscribe functions
@@ -173,6 +180,7 @@ const state: PluginState = {
   config: DEFAULT_CONFIG,
   embeddingProvider: null,
   searchManager: null,
+  memoryManager: null,
   api: null,
   initialized: false,
   eventCleanup: [],
@@ -351,13 +359,94 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
   };
 
   try {
+    // 1. Register memory schema (creates tables in wopr.sqlite)
+    await api.storage.register(memoryPluginSchema);
+    api.log.info("[semantic-memory] Registered memory schema with Storage API");
+
+    // 2. Create FTS5 virtual table via raw SQL
+    await api.storage.raw(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+        text,
+        id UNINDEXED,
+        path UNINDEXED,
+        source UNINDEXED,
+        model UNINDEXED,
+        start_line UNINDEXED,
+        end_line UNINDEXED
+      )
+    `);
+    api.log.info("[semantic-memory] Created FTS5 virtual table");
+
+    // 3. Ensure embedding column on chunks table (plugin owns this)
+    await api.storage
+      .raw(`ALTER TABLE memory_chunks ADD COLUMN embedding BLOB`)
+      .catch(() => {
+        /* column may already exist */
+      });
+
+    // 4. Create MemoryIndexManager with Storage API
+    const globalDir = process.env.WOPR_GLOBAL_IDENTITY || "/data/identity";
+    const sessionsDir = join(process.env.WOPR_HOME || "", "sessions");
+    const sessionDir = join(sessionsDir, "_boot");
+
+    state.memoryManager = await MemoryIndexManager.create({
+      globalDir,
+      sessionDir,
+      config: state.config as any, // MemoryConfig subset
+      storage: api.storage,
+      events: api.events,
+      log: api.log,
+    });
+    api.log.info("[semantic-memory] MemoryIndexManager created");
+
+    // 5. Register session:destroy handler (was initMemoryHooks in core)
+    const sessionDestroyHandler = await createSessionDestroyHandler({
+      sessionsDir,
+      log: api.log,
+    });
+    const unsubSessionDestroy = api.events.on("session:destroy", async (payload: any) => {
+      await sessionDestroyHandler(payload.session, payload.reason);
+    });
+    state.eventCleanup.push(unsubSessionDestroy);
+
+    // 6. Start file watcher (was in core)
+    if (state.config.sync?.watch !== false) {
+      await startWatcher({
+        dirs: [globalDir, sessionDir],
+        debounceMs: state.config.sync?.watchDebounceMs ?? 1500,
+        onSync: () => state.memoryManager!.sync(),
+        log: api.log,
+      });
+    }
+
+    // 7. Run initial sync
+    await state.memoryManager.sync();
+    api.log.info("[semantic-memory] Initial memory sync complete");
+
+    // 8. Register A2A memory tools
+    registerMemoryTools(api, state.memoryManager);
+
     // Create embedding provider
     state.embeddingProvider = await createEmbeddingProvider(state.config);
     api.log.info(`[semantic-memory] Embedding provider: ${state.embeddingProvider.id}`);
 
     // Create search manager
-    // Wire up keyword search from core if available
-    const keywordSearchFn = api.memory?.keywordSearch
+    // Wire up keyword search from memory manager
+    const keywordSearchFn = state.memoryManager
+      ? async (query: string, limit: number) => {
+          const results = await state.memoryManager!.search(query, { maxResults: limit });
+          return results.map((r: any) => ({
+            id: r.id || `${r.path}:${r.startLine}`,
+            path: r.path,
+            startLine: r.startLine || 0,
+            endLine: r.endLine || 0,
+            source: r.source || "memory",
+            snippet: r.snippet || r.content || "",
+            content: r.content || r.snippet || "",
+            textScore: r.score || 0,
+          }));
+        }
+      : api.memory?.keywordSearch
       ? async (query: string, limit: number) => {
           const results = await api.memory!.keywordSearch!(query, limit);
           return results.map((r: any) => ({
@@ -826,6 +915,11 @@ const plugin: SemanticMemoryPlugin = {
     // Stop the embedding queue first
     embeddingQueue.clear();
 
+    // Stop file watcher
+    if (state.api) {
+      await stopWatcher(state.api.log);
+    }
+
     // Unsubscribe all event handlers
     for (const unsub of state.eventCleanup) {
       try {
@@ -833,6 +927,12 @@ const plugin: SemanticMemoryPlugin = {
       } catch {}
     }
     state.eventCleanup = [];
+
+    // Close memory manager
+    if (state.memoryManager) {
+      await state.memoryManager.close();
+      state.memoryManager = null;
+    }
 
     if (state.searchManager) {
       await state.searchManager.close();
