@@ -3,8 +3,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WOPREventBus, PluginLogger } from "@wopr-network/plugin-types";
-import type { StorageApi } from "../memory-schema.js";
+import type { WOPREventBus, PluginLogger, StorageApi } from "@wopr-network/plugin-types";
 import { buildFileEntry, chunkMarkdown, ensureDir, hashText, listMemoryFiles } from "./internal.js";
 import { syncSessionFiles } from "./sync-sessions.js";
 import {

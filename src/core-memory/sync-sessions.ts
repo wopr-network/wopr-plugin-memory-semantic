@@ -1,7 +1,6 @@
 // Session file sync - indexes session transcripts for search
 // Adapted from OpenClaw for WOPR
-import type { PluginLogger } from "@wopr-network/plugin-types";
-import type { StorageApi } from "../memory-schema.js";
+import type { PluginLogger, StorageApi } from "@wopr-network/plugin-types";
 import { buildSessionEntry, listSessionFiles, type SessionFileEntry, sessionPathForFile } from "./session-files.js";
 
 export async function syncSessionFiles(params: {
