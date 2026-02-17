@@ -15,7 +15,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@wopr-network/plugin-types": "^0.1.0",
+    "@wopr-network/plugin-types": "^0.2.0",
     "openai": "^6.0.0",
     "usearch": "^2.0.0",
     "winston": "^3.0.0"
@@ -48,9 +48,18 @@
       "entry": "dist/index.js"
     },
     "webmcpTools": [
-      { "name": "searchMemory", "description": "Search the bot's semantic memory for relevant information" },
-      { "name": "listMemoryCollections", "description": "List available memory collections" },
-      { "name": "getMemoryStats", "description": "Get memory index statistics" }
+      {
+        "name": "searchMemory",
+        "description": "Search the bot's semantic memory for relevant information"
+      },
+      {
+        "name": "listMemoryCollections",
+        "description": "List available memory collections"
+      },
+      {
+        "name": "getMemoryStats",
+        "description": "Get memory index statistics"
+      }
     ]
   },
   "publishConfig": {
