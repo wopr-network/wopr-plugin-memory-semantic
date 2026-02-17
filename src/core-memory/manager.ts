@@ -3,7 +3,8 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { StorageApi, WOPREventBus, PluginLogger } from "@wopr-network/plugin-types";
+import type { WOPREventBus, PluginLogger } from "@wopr-network/plugin-types";
+import type { StorageApi } from "../memory-schema.js";
 import { buildFileEntry, chunkMarkdown, ensureDir, hashText, listMemoryFiles } from "./internal.js";
 import { syncSessionFiles } from "./sync-sessions.js";
 import {
@@ -29,7 +30,7 @@ type MemoryFileChange = {
   absPath?: string;
   source: MemorySource;
   chunks?: Array<{
-    id?: string;
+    id: string;
     text: string;
     hash: string;
     startLine: number;

@@ -66,6 +66,11 @@ export function registerMemoryTools(
   ctx: WOPRPluginContext,
   memoryManager: MemoryIndexManager,
 ): void {
+  // A2A tools require registerTool method (not yet in @wopr-network/plugin-types v0.2.0)
+  if (!("registerTool" in ctx)) {
+    return;
+  }
+
   const GLOBAL_IDENTITY_DIR = process.env.WOPR_GLOBAL_IDENTITY || "/data/identity";
   const GLOBAL_MEMORY_DIR = join(GLOBAL_IDENTITY_DIR, "memory");
   const SESSIONS_DIR = join(process.env.WOPR_HOME || "", "sessions");
@@ -73,8 +78,11 @@ export function registerMemoryTools(
   // Helper to get session dir from context
   const getSessionDir = (sessionName: string) => join(SESSIONS_DIR, sessionName);
 
+  // Type assertion after guard check
+  const api = ctx as typeof ctx & { registerTool: (tool: any) => void };
+
   // memory_read tool
-  ctx.registerTool({
+  api.registerTool({
     name: "memory_read",
     description:
       "Read a memory file. Checks global identity first, then session-specific. Supports daily logs, SELF.md, or topic files.",
@@ -87,7 +95,7 @@ export function registerMemoryTools(
         days: { type: "number", description: "For daily logs: read last N days (default: 7)" },
       },
     },
-    handler: async (args: { file?: string; from?: number; lines?: number; days?: number }, context) => {
+    handler: async (args: { file?: string; from?: number; lines?: number; days?: number }, context: any) => {
       const { file, days = 7, from, lines: lineCount } = args;
       const sessionName = context.sessionName || "default";
       const sessionDir = getSessionDir(sessionName);
@@ -178,7 +186,7 @@ export function registerMemoryTools(
   });
 
   // memory_write tool
-  ctx.registerTool({
+  api.registerTool({
     name: "memory_write",
     description: "Write to a memory file. Creates memory/ directory if needed.",
     inputSchema: {
@@ -190,7 +198,7 @@ export function registerMemoryTools(
       },
       required: ["file", "content"],
     },
-    handler: async (args: { file: string; content: string; append?: boolean }, context) => {
+    handler: async (args: { file: string; content: string; append?: boolean }, context: any) => {
       const { file, content, append } = args;
       const sessionName = context.sessionName || "default";
       const sessionDir = getSessionDir(sessionName);
@@ -216,7 +224,7 @@ export function registerMemoryTools(
   });
 
   // memory_search tool
-  ctx.registerTool({
+  api.registerTool({
     name: "memory_search",
     description:
       "Search memory files. Uses FTS5 keyword search by default; semantic/vector search available via wopr-plugin-memory-semantic. Supports temporal filtering.",
@@ -233,7 +241,7 @@ export function registerMemoryTools(
       },
       required: ["query"],
     },
-    handler: async (args: { query: string; maxResults?: number; minScore?: number; temporal?: string }, _context) => {
+    handler: async (args: { query: string; maxResults?: number; minScore?: number; temporal?: string }, _context: any) => {
       const { query, maxResults = 10, minScore = 0.35, temporal: temporalExpr } = args;
       const parsedTemporal = temporalExpr ? parseTemporalFilter(temporalExpr) : null;
       if (temporalExpr && !parsedTemporal) {
@@ -277,7 +285,7 @@ export function registerMemoryTools(
   });
 
   // memory_get tool
-  ctx.registerTool({
+  api.registerTool({
     name: "memory_get",
     description: "Read a snippet from memory files with optional line range.",
     inputSchema: {
@@ -289,7 +297,7 @@ export function registerMemoryTools(
       },
       required: ["path"],
     },
-    handler: async (args: { path: string; from?: number; lines?: number }, context) => {
+    handler: async (args: { path: string; from?: number; lines?: number }, context: any) => {
       const { path: relPath, from, lines: lineCount } = args;
       const sessionName = context.sessionName || "default";
       const sessionDir = getSessionDir(sessionName);
@@ -338,7 +346,7 @@ export function registerMemoryTools(
   });
 
   // self_reflect tool
-  ctx.registerTool({
+  api.registerTool({
     name: "self_reflect",
     description: "Add a reflection to SELF.md (private journal). Use for tattoos and daily reflections.",
     inputSchema: {
@@ -349,7 +357,7 @@ export function registerMemoryTools(
         section: { type: "string", description: "Section header (default: today's date)" },
       },
     },
-    handler: async (args: { reflection?: string; tattoo?: string; section?: string }, context) => {
+    handler: async (args: { reflection?: string; tattoo?: string; section?: string }, context: any) => {
       const { reflection, tattoo, section } = args;
       if (!reflection && !tattoo) {
         return { content: [{ type: "text", text: "Provide 'reflection' or 'tattoo'" }], isError: true };

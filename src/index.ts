@@ -29,13 +29,23 @@ import { DEFAULT_CONFIG } from "./types.js";
 
 /**
  * Extended plugin context — adds the optional `memory` extension that
- * core exposes for keyword search fallback.  Everything else comes from
- * the shared @wopr-network/plugin-types package.
+ * core exposes for keyword search fallback, the `storage` API, and `registerTool`.
+ * Everything else comes from the shared @wopr-network/plugin-types package.
  */
 interface PluginContext extends WOPRPluginContext {
   memory?: {
     keywordSearch?(query: string, limit: number): Promise<any[]>;
   };
+  storage: {
+    readonly driver: "sqlite" | "postgres";
+    register(schema: any): Promise<void>;
+    getRepository<T extends Record<string, unknown>>(namespace: string, tableName: string): unknown;
+    isRegistered(namespace: string): boolean;
+    getVersion(namespace: string): Promise<number>;
+    raw(sql: string, params?: unknown[]): Promise<unknown[]>;
+    transaction<R>(fn: (storage: any) => Promise<R>): Promise<R>;
+  };
+  registerTool?(tool: any): void;
 }
 
 const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");

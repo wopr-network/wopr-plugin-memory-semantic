@@ -4,7 +4,28 @@
  */
 
 import { z } from "zod";
-import type { PluginSchema, StorageApi } from "@wopr-network/plugin-types";
+
+// Storage API types (not yet exported from @wopr-network/plugin-types v0.2.0)
+export interface StorageApi {
+  readonly driver: "sqlite" | "postgres";
+  register(schema: PluginSchema): Promise<void>;
+  getRepository<T extends Record<string, unknown>>(namespace: string, tableName: string): unknown;
+  isRegistered(namespace: string): boolean;
+  getVersion(namespace: string): Promise<number>;
+  raw(sql: string, params?: unknown[]): Promise<unknown[]>;
+  transaction<R>(fn: (storage: StorageApi) => Promise<R>): Promise<R>;
+}
+
+export interface PluginSchema {
+  namespace: string;
+  version: number;
+  tables: Record<string, {
+    schema: z.ZodObject<Record<string, z.ZodTypeAny>>;
+    primaryKey: string;
+    indexes?: Array<{ fields: string[]; unique?: boolean }>;
+  }>;
+  migrate?: (fromVersion: number, toVersion: number, storage: StorageApi) => Promise<void>;
+}
 
 export const MEMORY_NAMESPACE = "memory";
 export const MEMORY_SCHEMA_VERSION = 1;

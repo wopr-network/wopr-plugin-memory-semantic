@@ -73,6 +73,13 @@ export interface SemanticMemoryConfig {
       scales: Array<{ tokens: number; overlap: number }>;
     };
   };
+
+  // Sync configuration
+  sync?: {
+    watch?: boolean;
+    watchDebounceMs?: number;
+    indexSessions?: boolean;
+  };
 }
 
 export const DEFAULT_CONFIG: SemanticMemoryConfig = {
