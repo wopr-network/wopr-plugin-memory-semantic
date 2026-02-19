@@ -21,7 +21,7 @@ import { MemoryIndexManager } from "./core-memory/manager.js";
 import { createSessionDestroyHandler } from "./core-memory/session-hook.js";
 import { startWatcher, stopWatcher } from "./core-memory/watcher.js";
 import { createEmbeddingProvider } from "./embeddings.js";
-import { memoryPluginSchema } from "./memory-schema.js";
+import { createMemoryPluginSchema } from "./memory-schema.js";
 import { performAutoRecall } from "./recall.js";
 import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
@@ -377,8 +377,11 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
   }
 
   try {
-    // 1. Register memory schema (creates tables in wopr.sqlite)
-    await api.storage.register(memoryPluginSchema);
+    // 1. Register memory schema (creates tables in wopr.sqlite).
+    // Pass the resolved instanceId so the v1→v2 migration tags rows with the
+    // correct value (config.instanceId || env var) rather than reading the env
+    // var directly inside the migration, which would mismatch when they differ.
+    await api.storage.register(createMemoryPluginSchema(state.instanceId));
     api.log.info("[semantic-memory] Registered memory schema with Storage API");
 
     // 2. Create FTS5 virtual table via raw SQL

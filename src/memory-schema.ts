@@ -46,46 +46,64 @@ const metaSchema = z.object({
   value: z.string(),
 });
 
-export const memoryPluginSchema: MigratablePluginSchema = {
-  namespace: MEMORY_NAMESPACE,
-  version: MEMORY_SCHEMA_VERSION,
-  tables: {
-    files: {
-      schema: filesSchema,
-      primaryKey: "id",
-      indexes: [{ fields: ["path", "source"], unique: true }, { fields: ["source"] }],
+/**
+ * Create a memory plugin schema with a resolved instanceId for migration.
+ *
+ * The v1→v2 migration tags existing rows with the resolved instanceId rather
+ * than reading process.env.WOPR_INSTANCE_ID directly. This ensures consistency
+ * when config.instanceId differs from the environment variable.
+ *
+ * @param resolvedInstanceId - The already-resolved instanceId
+ *   (i.e. `config.instanceId || process.env.WOPR_INSTANCE_ID`).
+ *   Pass undefined to disable tagging (single-instance mode).
+ */
+export function createMemoryPluginSchema(resolvedInstanceId: string | undefined): MigratablePluginSchema {
+  return {
+    namespace: MEMORY_NAMESPACE,
+    version: MEMORY_SCHEMA_VERSION,
+    tables: {
+      files: {
+        schema: filesSchema,
+        primaryKey: "id",
+        indexes: [{ fields: ["path", "source"], unique: true }, { fields: ["source"] }],
+      },
+      chunks: {
+        schema: chunksSchema,
+        primaryKey: "id",
+        indexes: [{ fields: ["path"] }, { fields: ["source"] }, { fields: ["instance_id"] }],
+      },
+      meta: {
+        schema: metaSchema,
+        primaryKey: "key",
+      },
     },
-    chunks: {
-      schema: chunksSchema,
-      primaryKey: "id",
-      indexes: [{ fields: ["path"] }, { fields: ["source"] }, { fields: ["instance_id"] }],
-    },
-    meta: {
-      schema: metaSchema,
-      primaryKey: "key",
-    },
-  },
-  migrate: async (fromVersion: number, toVersion: number, storage: StorageApi) => {
-    // v0 → v1: Import data from old index.sqlite into wopr.sqlite
-    if (fromVersion === 0 && toVersion >= 1) {
-      await migrateFromLegacyIndexSqlite(storage);
-    }
-    // v1 → v2: Add instance_id column for multi-tenant isolation
-    if (fromVersion < 2 && toVersion >= 2) {
-      await storage.raw(`ALTER TABLE memory_chunks ADD COLUMN instance_id TEXT`).catch(() => {
-        /* column may already exist */
-      });
-      await storage
-        .raw(`CREATE INDEX IF NOT EXISTS idx_memory_chunks_instance_id ON memory_chunks(instance_id)`)
-        .catch(() => {});
-      // Tag all existing chunks with the default instanceId if WOPR_INSTANCE_ID is set
-      const defaultInstanceId = process.env.WOPR_INSTANCE_ID;
-      if (defaultInstanceId) {
-        await storage.raw(`UPDATE memory_chunks SET instance_id = ? WHERE instance_id IS NULL`, [defaultInstanceId]);
+    migrate: async (fromVersion: number, toVersion: number, storage: StorageApi) => {
+      // v0 → v1: Import data from old index.sqlite into wopr.sqlite
+      if (fromVersion === 0 && toVersion >= 1) {
+        await migrateFromLegacyIndexSqlite(storage);
       }
-    }
-  },
-};
+      // v1 → v2: Add instance_id column for multi-tenant isolation
+      if (fromVersion < 2 && toVersion >= 2) {
+        await storage.raw(`ALTER TABLE memory_chunks ADD COLUMN instance_id TEXT`).catch(() => {
+          /* column may already exist */
+        });
+        await storage
+          .raw(`CREATE INDEX IF NOT EXISTS idx_memory_chunks_instance_id ON memory_chunks(instance_id)`)
+          .catch(() => {});
+        // Tag all existing chunks with the resolved instanceId.
+        // Using the caller-supplied value (config.instanceId || env var) instead of
+        // reading process.env.WOPR_INSTANCE_ID directly avoids a mismatch when
+        // config.instanceId is set and differs from the environment variable.
+        if (resolvedInstanceId) {
+          await storage.raw(`UPDATE memory_chunks SET instance_id = ? WHERE instance_id IS NULL`, [resolvedInstanceId]);
+        }
+      }
+    },
+  };
+}
+
+/** Default schema instance (no instanceId — for backward compat imports). */
+export const memoryPluginSchema: MigratablePluginSchema = createMemoryPluginSchema(undefined);
 
 /**
  * Migrate data from legacy $WOPR_HOME/memory/index.sqlite to the new Storage API
