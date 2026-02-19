@@ -190,6 +190,40 @@ describe("performAutoRecall", () => {
 });
 
 // =============================================================================
+// performAutoRecall with instanceId
+// =============================================================================
+
+describe("performAutoRecall with instanceId", () => {
+  it("should pass instanceId to search manager", async () => {
+    const config = makeConfig({ enabled: true, minScore: 0.3, maxMemories: 5 });
+    const mockSearch = vi.fn(async () => [makeMemory({ score: 0.85 })]);
+    const mockManager = { search: mockSearch } as any;
+
+    await performAutoRecall("How does auth work?", mockManager, config, "instance-123");
+
+    expect(mockSearch).toHaveBeenCalledWith(
+      expect.any(String),
+      config.autoRecall.maxMemories,
+      "instance-123",
+    );
+  });
+
+  it("should pass undefined instanceId when not provided", async () => {
+    const config = makeConfig({ enabled: true, minScore: 0.3, maxMemories: 5 });
+    const mockSearch = vi.fn(async () => [makeMemory({ score: 0.85 })]);
+    const mockManager = { search: mockSearch } as any;
+
+    await performAutoRecall("How does auth work?", mockManager, config);
+
+    expect(mockSearch).toHaveBeenCalledWith(
+      expect.any(String),
+      config.autoRecall.maxMemories,
+      undefined,
+    );
+  });
+});
+
+// =============================================================================
 // injectMemoriesIntoMessages
 // =============================================================================
 

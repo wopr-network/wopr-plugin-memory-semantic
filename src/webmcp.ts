@@ -114,6 +114,10 @@ export const WEBMCP_MANIFEST: WebMCPToolDeclaration[] = [
  *
  * @param registry - A WebMCPRegistry (or compatible) instance
  * @param apiBase  - Base URL of the WOPR daemon API (e.g. "/api" or "http://localhost:7437/api")
+ *
+ * TODO(WOP-624): When WebMCP supports multi-instance routing,
+ * pass auth.instanceId to scope the search. Server-side filtering
+ * (via state.instanceId in memory:search handler) provides isolation for now.
  */
 export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/api"): void {
   // 1. searchMemory
@@ -175,9 +179,7 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
         }>;
       }>(apiBase, "/plugins", auth);
 
-      const memoryPlugins = data.plugins.filter(
-        (p) => p.loaded && p.name.startsWith("memory-"),
-      );
+      const memoryPlugins = data.plugins.filter((p) => p.loaded && p.name.startsWith("memory-"));
 
       return {
         collections: memoryPlugins.map((p) => ({

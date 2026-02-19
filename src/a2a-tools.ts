@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
-import { MemoryIndexManager } from "./core-memory/manager.js";
+import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
 
 // Helper to resolve memory files
@@ -65,6 +65,7 @@ function listAllMemoryFiles(sessionDir: string, globalMemoryDir: string): string
 export function registerMemoryTools(
   ctx: WOPRPluginContext,
   memoryManager: MemoryIndexManager,
+  instanceId?: string,
 ): void {
   // A2A tools require registerTool method (not yet in @wopr-network/plugin-types v0.2.0)
   if (!("registerTool" in ctx)) {
@@ -241,7 +242,10 @@ export function registerMemoryTools(
       },
       required: ["query"],
     },
-    handler: async (args: { query: string; maxResults?: number; minScore?: number; temporal?: string }, _context: any) => {
+    handler: async (
+      args: { query: string; maxResults?: number; minScore?: number; temporal?: string },
+      _context: any,
+    ) => {
       const { query, maxResults = 10, minScore = 0.35, temporal: temporalExpr } = args;
       const parsedTemporal = temporalExpr ? parseTemporalFilter(temporalExpr) : null;
       if (temporalExpr && !parsedTemporal) {
@@ -257,8 +261,8 @@ export function registerMemoryTools(
       const temporal = parsedTemporal ?? undefined;
 
       try {
-        // Use the memory manager to search
-        const results = await memoryManager.search(query, { maxResults, minScore, temporal });
+        // Use the memory manager to search — scoped to this instance
+        const results = await memoryManager.search(query, { maxResults, minScore, temporal, instanceId });
 
         if (results.length === 0) {
           const temporalNote = temporalExpr ? ` within time range "${temporalExpr}"` : "";
@@ -266,7 +270,10 @@ export function registerMemoryTools(
         }
 
         const formatted = results
-          .map((r, i) => `[${i + 1}] ${r.source}/${r.path}:${r.startLine}-${r.endLine} (score: ${r.score.toFixed(2)})\n${r.snippet}`)
+          .map(
+            (r, i) =>
+              `[${i + 1}] ${r.source}/${r.path}:${r.startLine}-${r.endLine} (score: ${r.score.toFixed(2)})\n${r.snippet}`,
+          )
           .join("\n\n---\n\n");
         const temporalNote = temporalExpr ? ` (filtered by: ${temporalExpr})` : "";
 
