@@ -159,10 +159,12 @@ export interface VectorEntry {
   snippet: string;
   content: string; // Full indexed text for retrieval
   embedding: number[];
+  /** Tenant isolation tag. Undefined means visible to all instances (legacy/global). */
+  instanceId?: string;
 }
 
 export interface SemanticSearchManager {
-  search(query: string, maxResults?: number): Promise<MemorySearchResult[]>;
+  search(query: string, maxResults?: number, instanceId?: string): Promise<MemorySearchResult[]>;
   addEntry(entry: Omit<VectorEntry, "embedding">, text: string): Promise<void>;
   addEntriesBatch(entries: Array<{ entry: Omit<VectorEntry, "embedding">; text: string }>): Promise<number>;
   close(): Promise<void>;
@@ -181,6 +183,8 @@ interface HnswMapEntryMeta {
   source: string;
   snippet: string;
   content: string;
+  /** Tenant isolation tag. Undefined means visible to all instances (legacy/global). */
+  instanceId?: string;
 }
 
 interface HnswMapFile {
@@ -197,7 +201,7 @@ interface HnswMapFile {
 export async function createSemanticSearchManager(
   config: SemanticMemoryConfig,
   embeddingProvider: EmbeddingProvider,
-  keywordSearchFn?: (query: string, limit: number) => Promise<HybridKeywordResult[]>,
+  keywordSearchFn?: (query: string, limit: number, instanceId?: string) => Promise<HybridKeywordResult[]>,
   hnswPathOrFn?: string | (() => string | undefined),
 ): Promise<SemanticSearchManager> {
   // HNSW index + metadata maps (replaces brute-force vectors[] array)
@@ -233,6 +237,7 @@ export async function createSemanticSearchManager(
                 source: entry.source,
                 snippet: entry.snippet,
                 content: entry.content,
+                instanceId: entry.instanceId,
               }
             : null,
         );
@@ -386,6 +391,7 @@ export async function createSemanticSearchManager(
             source: e.source,
             snippet: e.snippet,
             content: e.content,
+            instanceId: e.instanceId,
             embedding: [],
           });
           idToLabel.set(e.id, label);
@@ -452,13 +458,22 @@ export async function createSemanticSearchManager(
     return embedding;
   };
 
-  const vectorSearch = async (queryEmbedding: number[], limit: number): Promise<HybridVectorResult[]> => {
+  const vectorSearch = async (
+    queryEmbedding: number[],
+    limit: number,
+    instanceId?: string,
+  ): Promise<HybridVectorResult[]> => {
     if (metadata.size === 0 || limit <= 0) {
       return [];
     }
 
-    // Clamp limit to index size (usearch throws if k > size) and ensure positive integer
-    const k = Math.min(Math.floor(limit), metadata.size);
+    // Over-fetch to compensate for post-retrieval instanceId filtering.
+    // Without over-fetch, a tenant with few entries surrounded by other tenants'
+    // entries would get sparse results because HNSW returns globally sorted candidates.
+    const overFetchMultiplier = instanceId ? 4 : 1;
+    const fetchLimit = Math.min(Math.floor(limit * overFetchMultiplier), metadata.size);
+    const k = Math.max(1, fetchLimit);
+
     const t0 = performance.now();
     const ef = Math.max(16, Math.min(512, k * 4));
     const results = index.search(new Float32Array(queryEmbedding), k, ef);
@@ -470,6 +485,11 @@ export async function createSemanticSearchManager(
       const label = typeof rawKey === "bigint" ? rawKey : BigInt(rawKey as number);
       const entry = metadata.get(label);
       if (!entry) continue;
+
+      // TENANT ISOLATION: skip entries that don't belong to this instance.
+      // Entries with undefined instanceId are legacy/global — visible to all.
+      if (instanceId && entry.instanceId !== undefined && entry.instanceId !== instanceId) continue;
+
       scored.push({
         id: entry.id,
         path: entry.path,
@@ -482,17 +502,17 @@ export async function createSemanticSearchManager(
       });
     }
 
-    log.debug(`HNSW search: k=${k}, returned=${scored.length}, took=${elapsed}ms`);
+    log.debug(`HNSW search: k=${k}, returned=${scored.length}, instanceId=${instanceId ?? "none"}, took=${elapsed}ms`);
     return scored;
   };
 
   return {
-    async search(query: string, maxResults?: number): Promise<MemorySearchResult[]> {
+    async search(query: string, maxResults?: number, instanceId?: string): Promise<MemorySearchResult[]> {
       const limit = maxResults ?? config.search.maxResults;
       const candidateLimit = limit * config.search.candidateMultiplier;
 
       const queryEmbedding = await getEmbedding(query);
-      const vectorResults = await vectorSearch(queryEmbedding, candidateLimit);
+      const vectorResults = await vectorSearch(queryEmbedding, candidateLimit, instanceId);
 
       if (!config.hybrid.enabled || !keywordSearchFn) {
         return vectorResults
@@ -509,7 +529,7 @@ export async function createSemanticSearchManager(
           }));
       }
 
-      const keywordResults = await keywordSearchFn(query, candidateLimit);
+      const keywordResults = await keywordSearchFn(query, candidateLimit, instanceId);
       const merged = mergeHybridResults({
         vector: vectorResults,
         keyword: keywordResults,

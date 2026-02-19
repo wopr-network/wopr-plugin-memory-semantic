@@ -21,7 +21,7 @@ import { MemoryIndexManager } from "./core-memory/manager.js";
 import { createSessionDestroyHandler } from "./core-memory/session-hook.js";
 import { startWatcher, stopWatcher } from "./core-memory/watcher.js";
 import { createEmbeddingProvider } from "./embeddings.js";
-import { memoryPluginSchema } from "./memory-schema.js";
+import { createMemoryPluginSchema } from "./memory-schema.js";
 import { performAutoRecall } from "./recall.js";
 import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
@@ -174,6 +174,8 @@ interface PluginState {
   api: PluginContext | null;
   initialized: boolean;
   eventCleanup: Array<() => void>; // event bus unsubscribe functions
+  /** Instance ID for multi-tenant isolation. Undefined disables filtering (single-instance mode). */
+  instanceId: string | undefined;
 }
 
 const state: PluginState = {
@@ -184,6 +186,7 @@ const state: PluginState = {
   api: null,
   initialized: false,
   eventCleanup: [],
+  instanceId: undefined,
 };
 
 // PluginContext replaced by WOPRPluginContext from @wopr-network/plugin-types
@@ -241,7 +244,7 @@ async function loadChunkMetadata(api: PluginContext): Promise<Map<string, import
   const entries = new Map<string, import("./search.js").VectorEntry>();
 
   try {
-    const stmt = db.prepare(`SELECT id, path, start_line, end_line, source, text FROM chunks`);
+    const stmt = db.prepare(`SELECT id, path, start_line, end_line, source, text, instance_id FROM chunks`);
     for (const row of stmt.iterate()) {
       const r = row as any;
       const text = typeof r.text === "string" ? r.text : "";
@@ -253,6 +256,7 @@ async function loadChunkMetadata(api: PluginContext): Promise<Map<string, import
         source: r.source,
         snippet: text.slice(0, 500),
         content: text,
+        instanceId: r.instance_id ?? undefined,
         embedding: [], // placeholder — real vectors live in HNSW index
       };
       entries.set(r.id, entry);
@@ -302,13 +306,14 @@ function persistNewEntryToDb(api: PluginContext, id: string): void {
   try {
     const blob = Buffer.from(new Float32Array(entry.embedding).buffer);
     db.prepare(
-      `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, updated_at, embedding)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, updated_at, embedding, instance_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          embedding = excluded.embedding,
          updated_at = excluded.updated_at,
          text = excluded.text,
-         model = excluded.model`,
+         model = excluded.model,
+         instance_id = excluded.instance_id`,
     ).run(
       entry.id,
       entry.path,
@@ -320,6 +325,7 @@ function persistNewEntryToDb(api: PluginContext, id: string): void {
       entry.content,
       Date.now(),
       blob,
+      entry.instanceId ?? state.instanceId ?? null,
     );
   } catch (err) {
     log.warn(`persistNewEntryToDb failed for ${id}: ${err instanceof Error ? err.message : err}`);
@@ -358,9 +364,24 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
     },
   };
 
+  // Capture instanceId: config > env var > undefined (single-instance mode)
+  state.instanceId = state.config.instanceId || process.env.WOPR_INSTANCE_ID || undefined;
+
+  if (!state.instanceId) {
+    api.log.warn(
+      "[semantic-memory] No instanceId configured — multi-tenant isolation DISABLED. " +
+        "Set instanceId in plugin config or WOPR_INSTANCE_ID env var.",
+    );
+  } else {
+    api.log.info(`[semantic-memory] Instance isolation enabled: instanceId=${state.instanceId}`);
+  }
+
   try {
-    // 1. Register memory schema (creates tables in wopr.sqlite)
-    await api.storage.register(memoryPluginSchema);
+    // 1. Register memory schema (creates tables in wopr.sqlite).
+    // Pass the resolved instanceId so the v1→v2 migration tags rows with the
+    // correct value (config.instanceId || env var) rather than reading the env
+    // var directly inside the migration, which would mismatch when they differ.
+    await api.storage.register(createMemoryPluginSchema(state.instanceId));
     api.log.info("[semantic-memory] Registered memory schema with Storage API");
 
     // 2. Create FTS5 virtual table via raw SQL
@@ -378,11 +399,9 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
     api.log.info("[semantic-memory] Created FTS5 virtual table");
 
     // 3. Ensure embedding column on chunks table (plugin owns this)
-    await api.storage
-      .raw(`ALTER TABLE memory_chunks ADD COLUMN embedding BLOB`)
-      .catch(() => {
-        /* column may already exist */
-      });
+    await api.storage.raw(`ALTER TABLE memory_chunks ADD COLUMN embedding BLOB`).catch(() => {
+      /* column may already exist */
+    });
 
     // 4. Create MemoryIndexManager with Storage API
     const globalDir = process.env.WOPR_GLOBAL_IDENTITY || "/data/identity";
@@ -424,7 +443,7 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
     api.log.info("[semantic-memory] Initial memory sync complete");
 
     // 8. Register A2A memory tools
-    registerMemoryTools(api, state.memoryManager);
+    registerMemoryTools(api, state.memoryManager, state.instanceId);
 
     // Create embedding provider
     state.embeddingProvider = await createEmbeddingProvider(state.config);
@@ -433,8 +452,8 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
     // Create search manager
     // Wire up keyword search from memory manager
     const keywordSearchFn = state.memoryManager
-      ? async (query: string, limit: number) => {
-          const results = await state.memoryManager!.search(query, { maxResults: limit });
+      ? async (query: string, limit: number, instanceId?: string) => {
+          const results = await state.memoryManager!.search(query, { maxResults: limit, instanceId });
           return results.map((r: any) => ({
             id: r.id || `${r.path}:${r.startLine}`,
             path: r.path,
@@ -447,20 +466,20 @@ async function initialize(api: PluginContext, userConfig?: Partial<SemanticMemor
           }));
         }
       : api.memory?.keywordSearch
-      ? async (query: string, limit: number) => {
-          const results = await api.memory!.keywordSearch!(query, limit);
-          return results.map((r: any) => ({
-            id: r.id || `${r.path}:${r.startLine}`,
-            path: r.path,
-            startLine: r.startLine || 0,
-            endLine: r.endLine || 0,
-            source: r.source || "memory",
-            snippet: r.snippet || r.content || "",
-            content: r.content || r.snippet || "", // Use content if available, fallback to snippet
-            textScore: r.score || 0,
-          }));
-        }
-      : undefined;
+        ? async (query: string, limit: number, _instanceId?: string) => {
+            const results = await api.memory!.keywordSearch!(query, limit);
+            return results.map((r: any) => ({
+              id: r.id || `${r.path}:${r.startLine}`,
+              path: r.path,
+              startLine: r.startLine || 0,
+              endLine: r.endLine || 0,
+              source: r.source || "memory",
+              snippet: r.snippet || r.content || "",
+              content: r.content || r.snippet || "", // Use content if available, fallback to snippet
+              textScore: r.score || 0,
+            }));
+          }
+        : undefined;
 
     // Load chunk metadata from SQLite for HNSW metadata seeding and bootstrap dedup.
     // Embeddings in SQLite are stale/empty — the HNSW binary is the vector source of truth.
@@ -519,6 +538,8 @@ async function bootstrapEmbeddings(chunkMetadata: Map<string, import("./search.j
         source: entry.source,
         snippet: entry.snippet,
         content: entry.content,
+        // Preserve existing instanceId from SQLite; only tag with current instance if unset
+        instanceId: entry.instanceId ?? state.instanceId,
       },
       text: entry.content,
     });
@@ -555,7 +576,12 @@ async function handleBeforeInject(api: PluginContext, payload: any): Promise<voi
   const lastUserMessage = { role: "user", content: payload.message };
 
   try {
-    const recall = await performAutoRecall(lastUserMessage.content, state.searchManager, state.config);
+    const recall = await performAutoRecall(
+      lastUserMessage.content,
+      state.searchManager,
+      state.config,
+      state.instanceId,
+    );
 
     if (recall && recall.memories.length > 0) {
       api.log.info(`[semantic-memory] Recalled ${recall.memories.length} memories (queryLen=${recall.query.length})`);
@@ -595,7 +621,7 @@ async function handleAfterInject(api: PluginContext, payload: any): Promise<void
         const subChunks = multiScaleChunk(
           text,
           baseId,
-          { path: `session:${sessionName}`, startLine: 0, endLine: 0, source },
+          { path: `session:${sessionName}`, startLine: 0, endLine: 0, source, instanceId: state.instanceId },
           ms.scales,
         );
         for (const sc of subChunks) {
@@ -611,6 +637,7 @@ async function handleAfterInject(api: PluginContext, payload: any): Promise<void
             source,
             snippet: text.slice(0, 500),
             content: text,
+            instanceId: state.instanceId,
           },
           text,
           persist: true,
@@ -661,6 +688,7 @@ async function handleAfterInject(api: PluginContext, payload: any): Promise<void
             source: "auto-capture",
             snippet: candidate.text.slice(0, 500),
             content: candidate.text,
+            instanceId: state.instanceId,
           },
           text: candidate.text,
           persist: true,
@@ -688,7 +716,7 @@ type PendingEntry = { entry: Omit<import("./search.js").VectorEntry, "embedding"
 function multiScaleChunk(
   text: string,
   baseId: string,
-  meta: { path: string; startLine: number; endLine: number; source: string },
+  meta: { path: string; startLine: number; endLine: number; source: string; instanceId?: string },
   scales: Array<{ tokens: number; overlap: number }>,
 ): PendingEntry[] {
   const results: PendingEntry[] = [];
@@ -707,6 +735,7 @@ function multiScaleChunk(
         source: meta.source,
         snippet: text.slice(0, 500),
         content: text.length <= maxChars ? text : text.slice(0, maxChars),
+        instanceId: meta.instanceId,
       },
       text: text.length <= maxChars ? text : text.slice(0, maxChars),
     });
@@ -730,6 +759,7 @@ function multiScaleChunk(
           source: meta.source,
           snippet: text.slice(0, 500),
           content: text,
+          instanceId: meta.instanceId,
         },
         text,
       });
@@ -750,6 +780,7 @@ function multiScaleChunk(
               source: meta.source,
               snippet: chunk.slice(0, 500),
               content: chunk,
+              instanceId: meta.instanceId,
             },
             text: chunk,
           });
@@ -850,6 +881,7 @@ const plugin: SemanticMemoryPlugin = {
                 startLine: chunk.startLine,
                 endLine: chunk.endLine,
                 source: change.source || "memory",
+                instanceId: state.instanceId,
               },
               ms.scales,
             );
@@ -864,6 +896,7 @@ const plugin: SemanticMemoryPlugin = {
                 source: change.source || "memory",
                 snippet: chunk.text.slice(0, 500),
                 content: chunk.text,
+                instanceId: state.instanceId,
               },
               text: chunk.text,
             });
@@ -894,8 +927,8 @@ const plugin: SemanticMemoryPlugin = {
         }
 
         try {
-          api.log.info(`[semantic-memory] Starting semantic search...`);
-          const results = await state.searchManager.search(payload.query, payload.maxResults);
+          api.log.info(`[semantic-memory] Starting semantic search (instanceId=${state.instanceId ?? "none"})...`);
+          const results = await state.searchManager.search(payload.query, payload.maxResults, state.instanceId);
           api.log.info(`[semantic-memory] Raw results: ${results.length}`);
           payload.results = results.filter((r) => r.score >= payload.minScore);
           api.log.info(
@@ -946,7 +979,7 @@ const plugin: SemanticMemoryPlugin = {
     if (!state.searchManager) {
       throw new Error("Semantic memory not initialized");
     }
-    return state.searchManager.search(query, maxResults);
+    return state.searchManager.search(query, maxResults, state.instanceId);
   },
 
   async capture(text: string, source = "manual"): Promise<void> {
@@ -967,6 +1000,7 @@ const plugin: SemanticMemoryPlugin = {
             source,
             snippet: text.slice(0, 500),
             content: text,
+            instanceId: state.instanceId,
           },
           text,
           persist: true,

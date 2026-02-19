@@ -3,7 +3,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WOPREventBus, PluginLogger, StorageApi } from "@wopr-network/plugin-types";
+import type { PluginLogger, StorageApi, WOPREventBus } from "@wopr-network/plugin-types";
 import { buildFileEntry, chunkMarkdown, ensureDir, hashText, listMemoryFiles } from "./internal.js";
 import { syncSessionFiles } from "./sync-sessions.js";
 import {
@@ -185,6 +185,7 @@ export class MemoryIndexManager {
       maxResults?: number;
       minScore?: number;
       temporal?: TemporalFilter;
+      instanceId?: string;
     },
   ): Promise<MemorySearchResult[]> {
     if (this.config.sync.onSearch && this.dirty) {
@@ -200,11 +201,16 @@ export class MemoryIndexManager {
     const maxResults = opts?.maxResults ?? this.config.query.maxResults;
     const temporal = opts?.temporal;
 
-    const results = await this.searchKeyword(cleaned, maxResults * 2, temporal);
+    const results = await this.searchKeyword(cleaned, maxResults * 2, temporal, opts?.instanceId);
     return results.filter((entry) => entry.score >= minScore).slice(0, maxResults);
   }
 
-  private async searchKeyword(query: string, limit: number, temporal?: TemporalFilter): Promise<MemorySearchResult[]> {
+  private async searchKeyword(
+    query: string,
+    limit: number,
+    temporal?: TemporalFilter,
+    instanceId?: string,
+  ): Promise<MemorySearchResult[]> {
     if (!this.fts.available) {
       return [];
     }
@@ -218,12 +224,19 @@ export class MemoryIndexManager {
     const temporalFilter = buildTemporalFilter(temporal, "c");
     const hasTemporal = temporalFilter.sql.length > 0;
 
-    // If temporal filter is set, join with chunks table to get updated_at
-    // FTS5 virtual tables don't have the updated_at column
+    // If instanceId is set, filter to matching rows (or NULL — legacy/global visible to all).
+    // Must JOIN with memory_chunks since FTS5 virtual tables don't have instance_id.
+    const instanceFilter: { sql: string; params: (string | number)[] } = instanceId
+      ? { sql: ` AND (c.instance_id = ? OR c.instance_id IS NULL)`, params: [instanceId] }
+      : { sql: "", params: [] };
+    const needsJoin = hasTemporal || instanceId;
+
+    // If temporal or instanceId filter is set, join with chunks table
+    // FTS5 virtual tables don't have updated_at or instance_id columns
     let sql: string;
     let params: (string | number)[];
 
-    if (hasTemporal) {
+    if (needsJoin) {
       sql = `
         SELECT
           f.id,
@@ -238,10 +251,11 @@ export class MemoryIndexManager {
         WHERE ${FTS_TABLE} MATCH ?
           ${sourceFilter.sql}
           ${temporalFilter.sql}
+          ${instanceFilter.sql}
         ORDER BY rank
         LIMIT ?
       `;
-      params = [ftsQuery, ...sourceFilter.params, ...temporalFilter.params, limit];
+      params = [ftsQuery, ...sourceFilter.params, ...temporalFilter.params, ...instanceFilter.params, limit];
     } else {
       sql = `
         SELECT
@@ -454,7 +468,10 @@ export class MemoryIndexManager {
     await this.storage.transaction(async () => {
       for (const change of event.changes) {
         if (change.action === "delete") {
-          await this.storage.raw(`DELETE FROM memory_files WHERE path = ? AND source = ?`, [change.path, change.source]);
+          await this.storage.raw(`DELETE FROM memory_files WHERE path = ? AND source = ?`, [
+            change.path,
+            change.source,
+          ]);
           await this.storage.raw(`DELETE FROM memory_chunks WHERE path = ? AND source = ?`, [
             change.path,
             change.source,

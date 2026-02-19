@@ -121,7 +121,7 @@ describe("enhanceSearch", () => {
 
     const result = await enhanceSearch({ query: "auth" }, options);
 
-    expect(options.searchManager.search).toHaveBeenCalledWith("auth", 10);
+    expect(options.searchManager.search).toHaveBeenCalledWith("auth", 10, undefined);
     expect(result.results).toHaveLength(1);
   });
 });

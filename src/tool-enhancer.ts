@@ -17,6 +17,7 @@ export interface SearchToolInput {
   query: string;
   maxResults?: number;
   minScore?: number;
+  instanceId?: string;
 }
 
 export interface SearchToolResult {
@@ -36,12 +37,12 @@ export async function enhanceSearch(
   options: ToolEnhancerOptions,
   fallbackSearch?: (query: string, limit: number) => Promise<MemorySearchResult[]>,
 ): Promise<SearchToolResult> {
-  const { query, maxResults = 10, minScore = 0.35 } = input;
+  const { query, maxResults = 10, minScore = 0.35, instanceId } = input;
   const { searchManager } = options;
 
   try {
-    // Perform semantic search
-    const results = await searchManager.search(query, maxResults);
+    // Perform semantic search — scoped to instance if provided
+    const results = await searchManager.search(query, maxResults, instanceId);
 
     // Filter by min score
     const filtered = results.filter((r) => r.score >= minScore);

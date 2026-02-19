@@ -84,6 +84,7 @@ export async function performAutoRecall(
   message: string,
   searchManager: SemanticSearchManager,
   config: SemanticMemoryConfig,
+  instanceId?: string,
 ): Promise<RecallResult | null> {
   if (!config.autoRecall.enabled) {
     return null;
@@ -95,8 +96,8 @@ export async function performAutoRecall(
     return null;
   }
 
-  // Search for relevant memories
-  const memories = await searchManager.search(query, config.autoRecall.maxMemories);
+  // Search for relevant memories — scoped to this instance if provided
+  const memories = await searchManager.search(query, config.autoRecall.maxMemories, instanceId);
 
   // Filter by minimum score
   const relevant = memories.filter((m) => m.score >= config.autoRecall.minScore);

@@ -80,6 +80,9 @@ export interface SemanticMemoryConfig {
     watchDebounceMs?: number;
     indexSessions?: boolean;
   };
+
+  /** Instance ID for multi-tenant isolation. Set by the daemon per bot instance. */
+  instanceId?: string;
 }
 
 export const DEFAULT_CONFIG: SemanticMemoryConfig = {
@@ -153,6 +156,8 @@ export interface MemorySearchResult {
   snippet: string;
   content: string; // Full indexed text for retrieval
   source: string;
+  /** Instance ID that owns this memory entry */
+  instanceId?: string;
 }
 
 export interface CaptureCandidate {

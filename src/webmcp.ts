@@ -112,10 +112,14 @@ export const WEBMCP_MANIFEST: WebMCPToolDeclaration[] = [
 /**
  * Register all 3 memory WebMCP tools on the given registry.
  *
- * @param registry - A WebMCPRegistry (or compatible) instance
- * @param apiBase  - Base URL of the WOPR daemon API (e.g. "/api" or "http://localhost:7437/api")
+ * @param registry   - A WebMCPRegistry (or compatible) instance
+ * @param apiBase    - Base URL of the WOPR daemon API (e.g. "/api" or "http://localhost:7437/api")
+ * @param instanceId - Tenant instanceId used to scope memory searches. When provided,
+ *   the search request instructs the bot to filter results to this instance only,
+ *   preventing cross-tenant memory leakage in multi-bot deployments. Pass the same
+ *   resolved value as the plugin uses (config.instanceId || WOPR_INSTANCE_ID).
  */
-export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/api"): void {
+export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/api", instanceId?: string): void {
   // 1. searchMemory
   registry.register({
     name: "searchMemory",
@@ -139,6 +143,11 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
       }
       const limit = typeof params.limit === "number" && params.limit > 0 ? Math.min(params.limit, 100) : 10;
 
+      // Scope the search to this instance when an instanceId is configured.
+      // Including the instanceId in the inject message causes the bot to pass it
+      // to the memory_search tool, which filters results to this tenant only.
+      const instanceScope = instanceId ? ` Scope results to instanceId ${JSON.stringify(instanceId)}.` : "";
+
       // Call the daemon's session inject endpoint with a structured search request.
       // The bot invokes the memory_search tool and returns results.
       const result = await daemonRequest<{
@@ -147,7 +156,7 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
       }>(apiBase, "/sessions/default/inject", auth, {
         method: "POST",
         body: JSON.stringify({
-          message: `Use the memory_search tool with query ${JSON.stringify(query)} and maxResults ${limit}. Return only the raw search results as JSON, no commentary.`,
+          message: `Use the memory_search tool with query ${JSON.stringify(query)} and maxResults ${limit}.${instanceScope} Return only the raw search results as JSON, no commentary.`,
           from: "webmcp",
         }),
       });
@@ -175,9 +184,7 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
         }>;
       }>(apiBase, "/plugins", auth);
 
-      const memoryPlugins = data.plugins.filter(
-        (p) => p.loaded && p.name.startsWith("memory-"),
-      );
+      const memoryPlugins = data.plugins.filter((p) => p.loaded && p.name.startsWith("memory-"));
 
       return {
         collections: memoryPlugins.map((p) => ({
