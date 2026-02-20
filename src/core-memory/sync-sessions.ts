@@ -29,10 +29,10 @@ export async function syncSessionFiles(params: {
     if (!entry) {
       return;
     }
-    const records = (await params.storage.raw(
-      `SELECT hash FROM memory_files WHERE path = ? AND source = ?`,
-      [entry.path, "sessions"],
-    )) as Array<{ hash: string }>;
+    const records = (await params.storage.raw(`SELECT hash FROM memory_files WHERE path = ? AND source = ?`, [
+      entry.path,
+      "sessions",
+    ])) as Array<{ hash: string }>;
     const record = records[0];
     if (!params.needsFullReindex && record?.hash === entry.hash) {
       return;

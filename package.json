@@ -46,6 +46,24 @@
   ],
   "license": "MIT",
   "wopr": {
+    "name": "@wopr-network/wopr-plugin-memory-semantic",
+    "version": "1.0.0",
+    "description": "Semantic memory search with embeddings, auto-recall, and auto-capture",
+    "capabilities": [
+      {
+        "name": "memory",
+        "description": "Semantic memory with auto-capture and auto-recall"
+      }
+    ],
+    "provides": {
+      "capabilities": [
+        {
+          "type": "memory",
+          "id": "semantic-memory",
+          "displayName": "Semantic Memory (Embeddings)"
+        }
+      ]
+    },
     "plugin": {
       "entry": "dist/index.js"
     },
@@ -62,7 +80,10 @@
         "name": "getMemoryStats",
         "description": "Get memory index statistics"
       }
-    ]
+    ],
+    "category": "memory",
+    "tags": ["memory", "semantic", "embeddings", "vector-search", "auto-recall"],
+    "icon": "🧠"
   },
   "publishConfig": {
     "access": "public"
