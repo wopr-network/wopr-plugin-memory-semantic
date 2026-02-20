@@ -15,8 +15,8 @@ importers:
         specifier: ^4.0.0
         version: 4.0.3
       openai:
-        specifier: ^6.0.0
-        version: 6.21.0(zod@3.25.76)
+        specifier: ^6.22.0
+        version: 6.22.0(zod@3.25.76)
       usearch:
         specifier: ^2.0.0
         version: 2.21.4
@@ -787,8 +787,8 @@ packages:
   one-time@1.0.0:
     resolution: {integrity: sha512-5DXOiRKwuSEcQ/l0kGCF6Q3jcADFv5tSmRaJck/OqkVFcOzutB134KRSfF0xDrL39MNnqxbHBbUUcjZIhTgb2g==}
 
-  openai@6.21.0:
-    resolution: {integrity: sha512-26dQFi76dB8IiN/WKGQOV+yKKTTlRCxQjoi2WLt0kMcH8pvxVyvfdBDkld5GTl7W1qvBpwVOtFcsqktj3fBRpA==}
+  openai@6.22.0:
+    resolution: {integrity: sha512-7Yvy17F33Bi9RutWbsaYt5hJEEJ/krRPOrwan+f9aCPuMat1WVsb2VNSII5W1EksKT6fF69TG/xj4XzodK3JZw==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -1696,7 +1696,7 @@ snapshots:
     dependencies:
       fn.name: 1.1.0
 
-  openai@6.21.0(zod@3.25.76):
+  openai@6.22.0(zod@3.25.76):
     optionalDependencies:
       zod: 3.25.76
 
