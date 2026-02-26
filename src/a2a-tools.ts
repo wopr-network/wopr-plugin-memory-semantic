@@ -4,7 +4,7 @@
  * These tools provide memory operations for agents via MCP/A2A.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
