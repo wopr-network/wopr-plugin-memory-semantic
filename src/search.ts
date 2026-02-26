@@ -562,8 +562,10 @@ export async function createSemanticSearchManager(
       const label = nextLabel;
       try {
         index.add(label, new Float32Array(embedding));
-      } catch (err: any) {
-        log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
+      } catch (error: unknown) {
+        log.warn(
+          `index.add failed for label=${label} id=${entry.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
         return;
       }
       nextLabel++;
@@ -636,8 +638,8 @@ export async function createSemanticSearchManager(
                 `ext=${Math.round(memAfterEmbed.external / 1024 / 1024)}MB buf=${Math.round(memAfterEmbed.arrayBuffers / 1024 / 1024)}MB`,
             );
             break;
-          } catch (err: any) {
-            const errMsg = err?.message || String(err);
+          } catch (error: unknown) {
+            const errMsg = error instanceof Error ? error.message : String(error);
             // Check for rate limit (429) errors
             if (errMsg.includes("429") || errMsg.includes("rate_limit") || errMsg.includes("Rate limit")) {
               // Extract wait time from error message if present
@@ -647,7 +649,7 @@ export async function createSemanticSearchManager(
               await new Promise((resolve) => setTimeout(resolve, waitSecs * 1000));
               retries++;
             } else {
-              throw err; // Non-rate-limit error, propagate
+              throw error; // Non-rate-limit error, propagate
             }
           }
         }
@@ -676,8 +678,10 @@ export async function createSemanticSearchManager(
           const label = nextLabel;
           try {
             index.add(label, new Float32Array(embedding));
-          } catch (err: any) {
-            log.warn(`index.add failed for label=${label} id=${entry.id}: ${err.message}`);
+          } catch (error: unknown) {
+            log.warn(
+              `index.add failed for label=${label} id=${entry.id}: ${error instanceof Error ? error.message : String(error)}`,
+            );
             continue;
           }
           nextLabel++;

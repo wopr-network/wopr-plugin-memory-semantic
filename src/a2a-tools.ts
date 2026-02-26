@@ -415,3 +415,22 @@ export function registerMemoryTools(
 
   ctx.log.info("[memory-semantic] Registered 5 A2A memory tools");
 }
+
+const TOOL_NAMES = ["memory_read", "memory_write", "memory_search", "memory_get", "self_reflect"];
+
+/**
+ * Unregister all A2A memory tools from the plugin context.
+ * Requires ctx to have an unregisterTool method.
+ */
+export function unregisterMemoryTools(ctx: WOPRPluginContext): void {
+  if (!("unregisterTool" in ctx)) return;
+  const api = ctx as typeof ctx & { unregisterTool: (name: string) => void };
+  for (const name of TOOL_NAMES) {
+    try {
+      api.unregisterTool(name);
+    } catch {
+      /* tool may not have been registered */
+    }
+  }
+  ctx.log.info("[memory-semantic] Unregistered A2A memory tools");
+}
