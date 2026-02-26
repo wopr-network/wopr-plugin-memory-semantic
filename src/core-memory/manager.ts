@@ -4,7 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginLogger, StorageApi, WOPREventBus } from "@wopr-network/plugin-types";
-import { buildFileEntry, chunkMarkdown, ensureDir, hashText, listMemoryFiles } from "./internal.js";
+import { buildFileEntry, chunkMarkdown, hashText, listMemoryFiles } from "./internal.js";
 import { syncSessionFiles } from "./sync-sessions.js";
 import {
   DEFAULT_MEMORY_CONFIG,
