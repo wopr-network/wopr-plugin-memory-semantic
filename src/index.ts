@@ -74,7 +74,7 @@ const pluginConfigSchema: ConfigSchema = {
   fields: [
     {
       name: "provider",
-      type: "select" as any,
+      type: "text",
       label: "Embedding Provider",
       description: "Which embedding provider to use (auto tries OpenAI → Gemini → Ollama → local)",
       default: "auto",
@@ -114,9 +114,7 @@ const pluginManifest: PluginManifest = {
       },
     ],
   },
-  requires: {
-    env: ["OPENAI_API_KEY"],
-  },
+  requires: {},
   lifecycle: {
     shutdownBehavior: "graceful",
     shutdownTimeoutMs: 15000,
