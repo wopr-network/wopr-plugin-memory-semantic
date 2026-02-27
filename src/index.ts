@@ -110,7 +110,6 @@ const pluginManifest: PluginManifest = {
         type: "memory",
         id: "semantic-memory",
         displayName: "Semantic Memory (Embeddings)",
-        tier: "byok",
       },
     ],
   },
