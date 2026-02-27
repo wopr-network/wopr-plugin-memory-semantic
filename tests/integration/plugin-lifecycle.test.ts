@@ -61,6 +61,19 @@ function createMockContext(): WOPRPluginContext & {
       apiKey: "test-key-fake",
     })),
     getExtension: vi.fn(() => null),
+    registerConfigSchema: vi.fn(),
+    unregisterConfigSchema: vi.fn(),
+    registerContextProvider: vi.fn(),
+    unregisterContextProvider: vi.fn(),
+    registerExtension: vi.fn(),
+    unregisterExtension: vi.fn(),
+    storage: {
+      register: vi.fn().mockResolvedValue(undefined),
+      raw: vi.fn().mockResolvedValue([]),
+      transaction: vi.fn().mockImplementation((fn: () => Promise<void>) => fn()),
+      get: vi.fn().mockResolvedValue(undefined),
+      set: vi.fn().mockResolvedValue(undefined),
+    },
     _handlers: handlers,
     _emit: async (event: string, payload: any) => {
       const list = handlers.get(event) || [];
@@ -69,22 +82,12 @@ function createMockContext(): WOPRPluginContext & {
   } as any;
 }
 
-function createStorageMock() {
-  return {
-    register: vi.fn().mockResolvedValue(undefined),
-    // storage.raw must return an array — MemoryIndexManager reads rows[0] from results
-    raw: vi.fn().mockResolvedValue([]),
-    transaction: vi.fn().mockImplementation((fn: () => Promise<void>) => fn()),
-    get: vi.fn().mockResolvedValue(undefined),
-    set: vi.fn().mockResolvedValue(undefined),
-  };
-}
 
 describe("plugin lifecycle", () => {
   it("should export required plugin interface fields", () => {
-    expect(plugin.id).toBe("memory-semantic");
-    expect(plugin.name).toBe("Semantic Memory");
+    expect(plugin.name).toBe("wopr-plugin-memory-semantic");
     expect(plugin.version).toBe("1.0.0");
+    expect(plugin.manifest).toBeDefined();
     expect(typeof plugin.init).toBe("function");
     expect(typeof plugin.shutdown).toBe("function");
     expect(typeof plugin.search).toBe("function");
@@ -102,7 +105,6 @@ describe("plugin lifecycle", () => {
   it("should register event hooks on init and remove them on shutdown", async () => {
     const ctx = createMockContext();
     const onSpy = vi.spyOn(ctx.events, "on");
-    (ctx as any).storage = createStorageMock();
 
     await plugin.init(ctx as any);
 
