@@ -117,6 +117,11 @@ const plugin: WOPRPlugin = {
     const storedConfig = ctx.getConfig?.() as Partial<SemanticMemoryConfig> | undefined;
     await initialize(ctx, state, embeddingQueue, log, storedConfig);
 
+    // Drain any cleanup functions registered inside initialize() into the single
+    // source-of-truth cleanups array so shutdown() handles them uniformly.
+    cleanups.push(...state.eventCleanup);
+    state.eventCleanup = [];
+
     if (!state.initialized) {
       ctx.log.error("[semantic-memory] Initialization failed — plugin will not activate");
       return;
@@ -175,7 +180,6 @@ const plugin: WOPRPlugin = {
     const unsubSearch = ctx.events.on("memory:search", (payload: any) => handleMemorySearch(state, ctx!.log, payload));
 
     cleanups.push(unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch);
-    state.eventCleanup = [unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch];
     ctx.log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 

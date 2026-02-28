@@ -32,15 +32,8 @@ export async function handleBeforeInject(state: HookState, log: HookLogger, payl
     return;
   }
 
-  const lastUserMessage = { role: "user", content: payload.message };
-
   try {
-    const recall = await performAutoRecall(
-      lastUserMessage.content,
-      state.searchManager,
-      state.config,
-      state.instanceId,
-    );
+    const recall = await performAutoRecall(payload.message, state.searchManager, state.config, state.instanceId);
 
     if (recall && recall.memories.length > 0) {
       log.info(`[semantic-memory] Recalled ${recall.memories.length} memories (queryLen=${recall.query.length})`);
@@ -143,6 +136,9 @@ export async function handleAfterInject(
       if (candidates.length > 0) {
         log.info(`[semantic-memory] Found ${candidates.length} capture candidates`);
 
+        // Auto-captured items are already semantically distilled (short, high-signal
+        // facts), so multi-scale chunking is intentionally skipped here — the full
+        // text IS the single meaningful scale.
         const captureEntries: PendingEntry[] = candidates.map((candidate) => ({
           entry: {
             id: `cap-${contentHash(candidate.text)}`,

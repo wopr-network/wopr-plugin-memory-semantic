@@ -208,6 +208,7 @@ export async function initialize(
     const loadedVectors = state.searchManager.getEntryCount();
     state.api = api;
     state.initialized = true;
+    initInProgress = false;
     api.log.info(`[semantic-memory] Initialized with ${loadedVectors} persisted vectors`);
 
     // Bootstrap: if HNSW is empty but we have chunk metadata, embed them now

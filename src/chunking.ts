@@ -13,7 +13,11 @@ export function multiScaleChunk(
   const results: PendingEntry[] = [];
 
   // Always emit a canonical entry under baseId (smallest scale) so that
-  // hasEntry(baseId) works for dedup on restart/bootstrap
+  // hasEntry(baseId) works for dedup on restart/bootstrap.
+  // Trade-off: when the text fits within the smallest scale, the scale loop below
+  // also emits an identical entry under `${baseId}-s${smallest.tokens}`. This
+  // intentional duplicate keeps the canonical ID stable for dedup while the
+  // per-scale IDs let callers query at a specific granularity.
   const smallest = scales.reduce((a, b) => (a.tokens <= b.tokens ? a : b), scales[0]);
   if (smallest && text.trim().length >= 10) {
     const maxChars = smallest.tokens * 4;

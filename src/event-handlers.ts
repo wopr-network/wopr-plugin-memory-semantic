@@ -8,6 +8,9 @@ interface EventLogger {
   error(msg: string): void;
 }
 
+// ContextLogger is structurally identical to EventLogger — reuse it.
+type ContextLogger = EventLogger;
+
 interface FilesChangedState {
   initialized: boolean;
   searchManager: SemanticSearchManager | null;
@@ -19,11 +22,6 @@ interface SearchState {
   initialized: boolean;
   searchManager: SemanticSearchManager | null;
   instanceId: string | undefined;
-}
-
-interface ContextLogger {
-  info(msg: string): void;
-  error(msg: string): void;
 }
 
 /** Handle memory:filesChanged — index new/updated file chunks via the embedding queue */

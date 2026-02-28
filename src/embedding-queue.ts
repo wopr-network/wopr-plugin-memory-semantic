@@ -16,6 +16,7 @@ export class EmbeddingQueue {
   private searchManager: SemanticSearchManager | null = null;
   private persistFn: PersistFn | null = null;
   private log: EmbeddingQueueLogger;
+  private drainResolvers: Array<() => void> = [];
 
   constructor(log: EmbeddingQueueLogger) {
     this.log = log;
@@ -84,19 +85,16 @@ export class EmbeddingQueue {
       }
     } finally {
       this.processing = false;
+      // Notify all waiters that the drain cycle finished.
+      const resolvers = this.drainResolvers.splice(0);
+      for (const resolve of resolvers) resolve();
     }
   }
 
   private waitForDrain(): Promise<void> {
+    if (!this.processing && this.queue.length === 0) return Promise.resolve();
     return new Promise<void>((resolve) => {
-      const check = () => {
-        if (!this.processing && this.queue.length === 0) {
-          resolve();
-        } else {
-          setTimeout(check, 500);
-        }
-      };
-      check();
+      this.drainResolvers.push(resolve);
     });
   }
 
@@ -106,5 +104,8 @@ export class EmbeddingQueue {
     this._bootstrapping = false;
     this.searchManager = null;
     this.persistFn = null;
+    // Resolve any pending drain waiters so they don't hang after shutdown.
+    const resolvers = this.drainResolvers.splice(0);
+    for (const resolve of resolvers) resolve();
   }
 }
