@@ -201,7 +201,8 @@ export async function listSessionNames(storage: StorageApi): Promise<string[]> {
       name: string;
     }>;
     return rows.map((r) => r.name);
-  } catch {
+  } catch (error) {
+    console.warn("[session-files] Failed to list active SQL-backed session names", error);
     return [];
   }
 }
@@ -220,6 +221,7 @@ export async function buildSessionEntryFromSql(
     const collected: string[] = [];
     for (const entry of entries) {
       if (entry.type === "context" || entry.type === "middleware") continue;
+      if (entry.from === "system") continue;
       const text = extractSessionText(entry.content);
       if (text) {
         const label = entry.from === "WOPR" ? "Assistant" : "User";
@@ -238,7 +240,8 @@ export async function buildSessionEntryFromSql(
       hash: hashText(content),
       content,
     };
-  } catch {
+  } catch (error) {
+    console.warn(`[session-files] Failed to build session entry from SQL for "${sessionName}"`, error);
     return null;
   }
 }
@@ -258,6 +261,7 @@ export async function getRecentSessionContentFromSql(
     const allMessages: string[] = [];
     for (const entry of entries) {
       if (entry.type === "context" || entry.type === "middleware") continue;
+      if (entry.from === "system") continue;
       if (entry.content && !entry.content.startsWith("/")) {
         const role = entry.from === "WOPR" ? "assistant" : "user";
         allMessages.push(`${role}: ${entry.content}`);
@@ -266,7 +270,8 @@ export async function getRecentSessionContentFromSql(
 
     const recentMessages = allMessages.slice(-messageCount);
     return recentMessages.length > 0 ? recentMessages.join("\n") : null;
-  } catch {
+  } catch (error) {
+    console.warn(`[session-files] Failed to get recent session content from SQL for "${sessionName}"`, error);
     return null;
   }
 }

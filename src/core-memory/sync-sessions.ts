@@ -2,12 +2,7 @@
 // Adapted from OpenClaw for WOPR
 import type { PluginLogger, StorageApi } from "@wopr-network/plugin-types";
 import type { SessionApi } from "../types.js";
-import {
-  buildSessionEntryFromSql,
-  listSessionNames,
-  type SessionFileEntry,
-  sessionPathForFile,
-} from "./session-files.js";
+import { buildSessionEntryFromSql, listSessionNames, type SessionFileEntry } from "./session-files.js";
 
 export async function syncSessionFiles(params: {
   storage: StorageApi;

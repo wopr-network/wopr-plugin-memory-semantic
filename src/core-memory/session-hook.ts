@@ -10,7 +10,7 @@ export async function createSessionDestroyHandler(params: {
   return async (sessionName: string, _reason: string) => {
     try {
       if (!params.sessionApi) {
-        params.log.warn("[session-hook] ctx.session not available — skipping memory save for " + sessionName);
+        params.log.warn(`[session-hook] ctx.session not available — skipping memory save for ${sessionName}`);
         return;
       }
 
