@@ -1,87 +1,60 @@
 // Auto-save session conversations to memory/YYYY-MM-DD.md on session:destroy
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { PluginLogger } from "@wopr-network/plugin-types";
+import type { SessionApi } from "../types.js";
 
 export async function createSessionDestroyHandler(params: {
   sessionsDir: string;
   log: PluginLogger;
+  sessionApi?: SessionApi;
 }): Promise<(sessionName: string, reason: string) => Promise<void>> {
   return async (sessionName: string, _reason: string) => {
     try {
-      const sessionDir = path.join(params.sessionsDir, sessionName);
-      const conversationPath = path.join(sessionDir, `${sessionName}.conversation.jsonl`);
-
-      // Check if conversation log exists
-      try {
-        await fs.access(conversationPath);
-      } catch {
-        return; // No conversation log to save
+      if (!params.sessionApi) {
+        params.log.warn("[session-hook] ctx.session not available — skipping memory save for " + sessionName);
+        return;
       }
 
-      // Read conversation log
-      const content = await fs.readFile(conversationPath, "utf-8");
-      const lines = content.trim().split("\n");
+      // Read conversation from SQL
+      const entries = await params.sessionApi.readConversationLog(sessionName);
 
-      // Extract messages
-      const messages: Array<{ role: string; text: string }> = [];
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line);
-
-          // WOPR format: type="message"|"response", from="Username"|"WOPR", content="..."
-          if (
-            (entry.type === "message" || entry.type === "response") &&
-            typeof entry.from === "string" &&
-            typeof entry.content === "string"
-          ) {
-            const role = entry.type === "response" ? "WOPR" : entry.from;
-            messages.push({ role, text: entry.content });
-            continue;
-          }
-
-          // OpenClaw/Claude format: type="message", message={role, content}
-          if (entry.type === "message" && entry.message) {
-            const msg = entry.message;
-            if (typeof msg.role === "string" && (msg.role === "user" || msg.role === "assistant")) {
-              const text = Array.isArray(msg.content)
-                ? msg.content.find((c: { type?: string; text?: string }) => c.type === "text")?.text
-                : msg.content;
-              if (text) {
-                const role = msg.role === "user" ? "User" : "Assistant";
-                messages.push({ role, text });
-              }
-            }
-          }
-        } catch {
-          // Skip invalid JSON lines
-        }
-      }
-
-      if (messages.length === 0) {
+      if (entries.length === 0) {
         return; // No messages to save
       }
 
-      // Save to today's memory file
-      const memoryDir = path.join(sessionDir, "memory");
-      await fs.mkdir(memoryDir, { recursive: true });
+      // Extract messages (skip system/context entries)
+      const messages: Array<{ role: string; text: string }> = [];
+      for (const entry of entries) {
+        if (entry.type === "context" || entry.type === "middleware") continue;
 
-      const today = new Date().toISOString().split("T")[0];
-      const memoryFile = path.join(memoryDir, `${today}.md`);
+        let role: string;
+        if (entry.from === "system") {
+          continue; // skip system messages
+        } else if (entry.from === "WOPR") {
+          role = "WOPR";
+        } else {
+          role = entry.from;
+        }
+        messages.push({ role, text: entry.content });
+      }
+
+      if (messages.length === 0) {
+        return;
+      }
 
       // Format conversation
       const formattedMessages = messages.map((msg) => `**${msg.role}**: ${msg.text}`).join("\n\n");
-
       const header = `## Session: ${sessionName}\n\n`;
       const footer = `\n\n---\n\n`;
+      const today = new Date().toISOString().split("T")[0];
+      const filename = `memory/${today}.md`;
 
-      // Append to existing file or create new
-      try {
-        const existing = await fs.readFile(memoryFile, "utf-8");
-        await fs.writeFile(memoryFile, existing + header + formattedMessages + footer);
-      } catch {
-        await fs.writeFile(memoryFile, header + formattedMessages + footer);
-      }
+      // Read existing content and append, or create new
+      const existing = await params.sessionApi.getContext(sessionName, filename);
+      const content = existing
+        ? existing + header + formattedMessages + footer
+        : header + formattedMessages + footer;
+
+      await params.sessionApi.setContext(sessionName, filename, content, "session");
 
       params.log.info(`[session-hook] Saved session ${sessionName} to ${today}.md`);
     } catch (err) {

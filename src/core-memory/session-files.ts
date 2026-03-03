@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "./internal.js";
+import type { StorageApi } from "@wopr-network/plugin-types";
+import type { SessionApi } from "../types.js";
 
 // SESSIONS_DIR removed - passed as parameter instead
 
@@ -183,6 +185,87 @@ export async function getRecentSessionContent(
 
     const recentMessages = allMessages.slice(-messageCount);
     return recentMessages.join("\n");
+  } catch {
+    return null;
+  }
+}
+
+// --- SQL-backed functions (WOP-1535) ---
+
+/**
+ * List active session names from SQL (replaces filesystem scan for .conversation.jsonl)
+ */
+export async function listSessionNames(storage: StorageApi): Promise<string[]> {
+  try {
+    const rows = (await storage.raw(`SELECT name FROM sessions WHERE status = ?`, ["active"])) as Array<{
+      name: string;
+    }>;
+    return rows.map((r) => r.name);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build a SessionFileEntry from SQL conversation data (replaces buildSessionEntry that read .jsonl files)
+ */
+export async function buildSessionEntryFromSql(
+  sessionName: string,
+  sessionApi: SessionApi,
+): Promise<SessionFileEntry | null> {
+  try {
+    const entries = await sessionApi.readConversationLog(sessionName);
+    if (entries.length === 0) return null;
+
+    const collected: string[] = [];
+    for (const entry of entries) {
+      if (entry.type === "context" || entry.type === "middleware") continue;
+      const text = extractSessionText(entry.content);
+      if (text) {
+        const label = entry.from === "WOPR" ? "Assistant" : "User";
+        collected.push(`${label}: ${text}`);
+      }
+    }
+
+    if (collected.length === 0) return null;
+    const content = collected.join("\n");
+
+    return {
+      path: `sessions/${sessionName}`,
+      absPath: `sql://sessions/${sessionName}`,
+      mtimeMs: Date.now(),
+      size: content.length,
+      hash: hashText(content),
+      content,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get recent session content from SQL (replaces getRecentSessionContent that read .jsonl files)
+ */
+export async function getRecentSessionContentFromSql(
+  sessionName: string,
+  sessionApi: SessionApi,
+  messageCount: number = 15,
+): Promise<string | null> {
+  try {
+    const entries = await sessionApi.readConversationLog(sessionName);
+    if (entries.length === 0) return null;
+
+    const allMessages: string[] = [];
+    for (const entry of entries) {
+      if (entry.type === "context" || entry.type === "middleware") continue;
+      if (entry.content && !entry.content.startsWith("/")) {
+        const role = entry.from === "WOPR" ? "assistant" : "user";
+        allMessages.push(`${role}: ${entry.content}`);
+      }
+    }
+
+    const recentMessages = allMessages.slice(-messageCount);
+    return recentMessages.length > 0 ? recentMessages.join("\n") : null;
   } catch {
     return null;
   }

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { PluginLogger, StorageApi, WOPREventBus } from "@wopr-network/plugin-types";
 import { buildFileEntry, chunkMarkdown, hashText, listMemoryFiles } from "./internal.js";
 import { syncSessionFiles } from "./sync-sessions.js";
+import type { SessionApi } from "../types.js";
 import {
   DEFAULT_MEMORY_CONFIG,
   type MemoryConfig,
@@ -123,6 +124,7 @@ export class MemoryIndexManager {
   private readonly storage: StorageApi;
   private readonly events: WOPREventBus;
   private readonly log: PluginLogger;
+  private readonly sessionApi: SessionApi | undefined;
   private readonly sources: Set<MemorySource>;
   private readonly fts: {
     enabled: boolean;
@@ -140,6 +142,7 @@ export class MemoryIndexManager {
     storage: StorageApi;
     events: WOPREventBus;
     log: PluginLogger;
+    sessionApi?: SessionApi;
   }): Promise<MemoryIndexManager> {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...params.config };
 
@@ -150,6 +153,7 @@ export class MemoryIndexManager {
       storage: params.storage,
       events: params.events,
       log: params.log,
+      sessionApi: params.sessionApi,
     });
   }
 
@@ -160,6 +164,7 @@ export class MemoryIndexManager {
     storage: StorageApi;
     events: WOPREventBus;
     log: PluginLogger;
+    sessionApi?: SessionApi;
   }) {
     this.globalDir = params.globalDir;
     this.sessionDir = params.sessionDir;
@@ -168,6 +173,7 @@ export class MemoryIndexManager {
     this.storage = params.storage;
     this.events = params.events;
     this.log = params.log;
+    this.sessionApi = params.sessionApi;
     this.sources = new Set(["global", "session", "sessions"] as MemorySource[]);
     this.fts = { enabled: true, available: true }; // FTS5 already created by plugin init
 
@@ -371,6 +377,7 @@ export class MemoryIndexManager {
       model: "fts5",
       dirtyFiles: new Set(),
       runWithConcurrency: (tasks, concurrency) => this.runWithConcurrency(tasks, concurrency),
+      sessionApi: this.sessionApi,
       indexSessionFile: async (entry) => {
         const chunks = chunkMarkdown(entry.content, this.config.chunking);
         if (chunks.length === 0) return;

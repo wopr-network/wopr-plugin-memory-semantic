@@ -165,3 +165,21 @@ export interface CaptureCandidate {
   category: MemoryCategory;
   importance: number;
 }
+
+// Session API types (mirrors WOP-1538 SessionApi from core)
+// Remove once @wopr-network/plugin-types is republished with SessionApi
+
+export interface ConversationEntry {
+  ts: number;
+  from: string;
+  senderId?: string;
+  content: string;
+  type: "context" | "message" | "response" | "middleware";
+  channel?: { id: string; type: string; name?: string };
+}
+
+export interface SessionApi {
+  getContext(sessionName: string, filename: string): Promise<string | null>;
+  setContext(sessionName: string, filename: string, content: string, source: "global" | "session"): Promise<void>;
+  readConversationLog(sessionName: string, limit?: number): Promise<ConversationEntry[]>;
+}
