@@ -1,7 +1,7 @@
 // Session file indexing - adapted from OpenClaw for WOPR
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { StorageApi } from "@wopr-network/plugin-types";
+import type { PluginLogger, StorageApi } from "@wopr-network/plugin-types";
 import type { SessionApi } from "../types.js";
 import { hashText } from "./internal.js";
 
@@ -194,16 +194,17 @@ export async function getRecentSessionContent(
 
 /**
  * List active session names from SQL (replaces filesystem scan for .conversation.jsonl)
+ * Throws on SQL error so callers can distinguish "no sessions" from "SQL failure".
  */
-export async function listSessionNames(storage: StorageApi): Promise<string[]> {
+export async function listSessionNames(storage: StorageApi, log?: PluginLogger): Promise<string[]> {
   try {
     const rows = (await storage.raw(`SELECT name FROM sessions WHERE status = ?`, ["active"])) as Array<{
       name: string;
     }>;
     return rows.map((r) => r.name);
-  } catch (error) {
-    console.warn("[session-files] Failed to list active SQL-backed session names", error);
-    return [];
+  } catch (err) {
+    log?.warn(`[session-files] listSessionNames SQL error: ${err instanceof Error ? err.message : String(err)}`);
+    throw err;
   }
 }
 
@@ -213,6 +214,7 @@ export async function listSessionNames(storage: StorageApi): Promise<string[]> {
 export async function buildSessionEntryFromSql(
   sessionName: string,
   sessionApi: SessionApi,
+  log?: PluginLogger,
 ): Promise<SessionFileEntry | null> {
   try {
     const entries = await sessionApi.readConversationLog(sessionName);
@@ -224,7 +226,7 @@ export async function buildSessionEntryFromSql(
       if (entry.from === "system") continue;
       const text = extractSessionText(entry.content);
       if (text) {
-        const label = entry.from === "WOPR" ? "Assistant" : "User";
+        const label = entry.type === "response" ? "Assistant" : "User";
         collected.push(`${label}: ${text}`);
       }
     }
@@ -240,8 +242,10 @@ export async function buildSessionEntryFromSql(
       hash: hashText(content),
       content,
     };
-  } catch (error) {
-    console.warn(`[session-files] Failed to build session entry from SQL for "${sessionName}"`, error);
+  } catch (err) {
+    log?.warn(
+      `[session-files] buildSessionEntryFromSql failed for ${sessionName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -253,6 +257,7 @@ export async function getRecentSessionContentFromSql(
   sessionName: string,
   sessionApi: SessionApi,
   messageCount: number = 15,
+  log?: PluginLogger,
 ): Promise<string | null> {
   try {
     const entries = await sessionApi.readConversationLog(sessionName);
@@ -263,15 +268,17 @@ export async function getRecentSessionContentFromSql(
       if (entry.type === "context" || entry.type === "middleware") continue;
       if (entry.from === "system") continue;
       if (entry.content && !entry.content.startsWith("/")) {
-        const role = entry.from === "WOPR" ? "assistant" : "user";
+        const role = entry.type === "response" ? "assistant" : "user";
         allMessages.push(`${role}: ${entry.content}`);
       }
     }
 
     const recentMessages = allMessages.slice(-messageCount);
     return recentMessages.length > 0 ? recentMessages.join("\n") : null;
-  } catch (error) {
-    console.warn(`[session-files] Failed to get recent session content from SQL for "${sessionName}"`, error);
+  } catch (err) {
+    log?.warn(
+      `[session-files] getRecentSessionContentFromSql failed for ${sessionName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }

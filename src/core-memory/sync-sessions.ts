@@ -24,7 +24,15 @@ export async function syncSessionFiles(params: {
     return;
   }
 
-  const sessionNames = await listSessionNames(params.storage);
+  let sessionNames: string[];
+  try {
+    sessionNames = await listSessionNames(params.storage, params.log);
+  } catch (err) {
+    params.log.error(
+      `[sync-sessions] listSessionNames failed — aborting sync to avoid stale deletion: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
   const activePaths = new Set(sessionNames.map((name) => `sessions/${name}`));
   const indexAll = params.needsFullReindex || params.dirtyFiles.size === 0;
 
@@ -34,7 +42,7 @@ export async function syncSessionFiles(params: {
       return;
     }
 
-    const entry = await buildSessionEntryFromSql(sessionName, params.sessionApi!);
+    const entry = await buildSessionEntryFromSql(sessionName, params.sessionApi!, params.log);
     if (!entry) {
       return;
     }
