@@ -50,9 +50,7 @@ export async function createSessionDestroyHandler(params: {
 
       // Read existing content and append, or create new
       const existing = await params.sessionApi.getContext(sessionName, filename);
-      const content = existing
-        ? existing + header + formattedMessages + footer
-        : header + formattedMessages + footer;
+      const content = existing ? existing + header + formattedMessages + footer : header + formattedMessages + footer;
 
       await params.sessionApi.setContext(sessionName, filename, content, "session");
 

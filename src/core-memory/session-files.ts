@@ -1,9 +1,9 @@
 // Session file indexing - adapted from OpenClaw for WOPR
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hashText } from "./internal.js";
 import type { StorageApi } from "@wopr-network/plugin-types";
 import type { SessionApi } from "../types.js";
+import { hashText } from "./internal.js";
 
 // SESSIONS_DIR removed - passed as parameter instead
 
