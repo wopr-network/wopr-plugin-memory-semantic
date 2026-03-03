@@ -1,7 +1,8 @@
 // Session file sync - indexes session transcripts for search
 // Adapted from OpenClaw for WOPR
 import type { PluginLogger, StorageApi } from "@wopr-network/plugin-types";
-import { buildSessionEntry, listSessionFiles, type SessionFileEntry, sessionPathForFile } from "./session-files.js";
+import type { SessionApi } from "../types.js";
+import { buildSessionEntryFromSql, listSessionNames, type SessionFileEntry } from "./session-files.js";
 
 export async function syncSessionFiles(params: {
   storage: StorageApi;
@@ -16,19 +17,28 @@ export async function syncSessionFiles(params: {
   indexSessionFile: (entry: SessionFileEntry) => Promise<void>;
   concurrency: number;
   log: PluginLogger;
+  sessionApi?: SessionApi;
 }): Promise<void> {
-  const files = await listSessionFiles(params.sessionsDir);
-  const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
+  if (!params.sessionApi) {
+    params.log.warn("[sync-sessions] ctx.session not available — skipping session sync");
+    return;
+  }
+
+  const sessionNames = await listSessionNames(params.storage);
+  const activePaths = new Set(sessionNames.map((name) => `sessions/${name}`));
   const indexAll = params.needsFullReindex || params.dirtyFiles.size === 0;
 
-  const tasks = files.map((absPath) => async () => {
-    if (!indexAll && !params.dirtyFiles.has(absPath)) {
+  const tasks = sessionNames.map((sessionName) => async () => {
+    const entryPath = `sessions/${sessionName}`;
+    if (!indexAll && !params.dirtyFiles.has(entryPath)) {
       return;
     }
-    const entry = await buildSessionEntry(absPath);
+
+    const entry = await buildSessionEntryFromSql(sessionName, params.sessionApi!);
     if (!entry) {
       return;
     }
+
     const records = (await params.storage.raw(`SELECT hash FROM memory_files WHERE path = ? AND source = ?`, [
       entry.path,
       "sessions",

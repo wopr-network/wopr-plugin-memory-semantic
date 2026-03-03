@@ -21,7 +21,7 @@ import { handleFilesChanged, handleMemorySearch } from "./event-handlers.js";
 import { handleAfterInject, handleBeforeInject } from "./hooks.js";
 import { initialize, type PluginState } from "./init.js";
 import { contentHash, memoryContextProvider, pluginConfigSchema, pluginManifest } from "./manifest.js";
-import type { MemorySearchResult, SemanticMemoryConfig } from "./types.js";
+import type { MemorySearchResult, SemanticMemoryConfig, SessionApi } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
 /**
@@ -34,6 +34,7 @@ interface PluginContext extends WOPRPluginContext {
     keywordSearch?(query: string, limit: number): Promise<any[]>;
   };
   registerTool?(tool: any): void;
+  session?: SessionApi;
 }
 
 let ctx: PluginContext | null = null;

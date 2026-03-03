@@ -9,13 +9,14 @@ import { createEmbeddingProvider } from "./embeddings.js";
 import { createMemoryPluginSchema } from "./memory-schema.js";
 import { getHnswPath, loadChunkMetadata, persistNewEntryToDb } from "./persistence.js";
 import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
-import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
+import type { EmbeddingProvider, SemanticMemoryConfig, SessionApi } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
 
 interface PluginContext extends WOPRPluginContext {
   memory?: {
     keywordSearch?(query: string, limit: number): Promise<any[]>;
   };
+  session?: SessionApi;
 }
 
 export interface PluginState {
@@ -121,6 +122,7 @@ export async function initialize(
       storage: api.storage,
       events: api.events,
       log: api.log,
+      sessionApi: api.session,
     });
     api.log.info("[semantic-memory] MemoryIndexManager created");
 
@@ -128,6 +130,7 @@ export async function initialize(
     const sessionDestroyHandler = await createSessionDestroyHandler({
       sessionsDir,
       log: api.log,
+      sessionApi: api.session,
     });
     const unsubSessionDestroy = api.events.on("session:destroy", async (payload: any) => {
       await sessionDestroyHandler(payload.session, payload.reason);
