@@ -44,6 +44,7 @@ export async function syncSessionFiles(params: {
 
     const entry = await buildSessionEntryFromSql(sessionName, params.sessionApi!, params.log);
     if (!entry) {
+      activePaths.delete(`sessions/${sessionName}`); // allow stale cleanup
       return;
     }
 
