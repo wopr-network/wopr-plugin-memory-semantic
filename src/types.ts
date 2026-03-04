@@ -56,7 +56,6 @@ export interface SemanticMemoryConfig {
 
   // Storage
   store: {
-    path?: string; // SQLite database path
     vectorEnabled: boolean;
   };
 
