@@ -197,6 +197,8 @@ describe("cross-tenant isolation", () => {
       const ownResults = await sm2.search("persisted tenant", 10, "instance-persist");
       const found = ownResults.find((r) => r.snippet?.includes("persisted tenant"));
       expect(found).toBeDefined();
+      expect(found?.snippet).toContain("persisted tenant");
+      expect(found?.instanceId).toBe("instance-persist");
 
       await sm2.close();
     } finally {
@@ -244,6 +246,8 @@ describe("cross-tenant isolation", () => {
     const resultsB = await sm.search("quarterly report business plan", 5, "instance-b");
     const found = resultsB.find((r) => r.snippet?.includes("instance b sole entry"));
     expect(found).toBeDefined();
+    expect(found?.snippet).toContain("instance b sole entry");
+    expect(found?.instanceId).toBe("instance-b");
 
     // And no flooding from instance A
     const leaked = resultsB.find((r) => r.snippet?.includes("customer data entry"));
