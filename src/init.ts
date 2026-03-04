@@ -223,8 +223,9 @@ export async function initialize(
       api.log.info(`[semantic-memory] Initialized — waiting for memory:filesChanged events from core`);
     }
   } catch (err) {
-    initInProgress = false;
     api.log.error(`[semantic-memory] Failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    initInProgress = false;
   }
 }
 

@@ -61,6 +61,11 @@ function createMockContext(): WOPRPluginContext & {
       apiKey: "test-key-fake",
     })),
     getExtension: vi.fn(() => null),
+    registerConfigSchema: vi.fn(),
+    unregisterConfigSchema: vi.fn(),
+    registerContextProvider: vi.fn(),
+    unregisterContextProvider: vi.fn(),
+    registerExtension: vi.fn(),
     _handlers: handlers,
     _emit: async (event: string, payload: any) => {
       const list = handlers.get(event) || [];
@@ -144,5 +149,31 @@ describe("plugin lifecycle", () => {
 
   it("should throw if capture is called before init", async () => {
     await expect(plugin.capture("some text")).rejects.toThrow("not initialized");
+  });
+
+  it("should allow re-initialization after shutdown", async () => {
+    const ctx = createMockContext();
+    (ctx as any).storage = createStorageMock();
+
+    // First init
+    await plugin.init(ctx as any);
+    expect(plugin.getConfig()).toBeDefined();
+
+    // Shutdown
+    await plugin.shutdown();
+
+    // Re-init — this would hang forever before the fix because
+    // initInProgress stayed true after successful init
+    const ctx2 = createMockContext();
+    (ctx2 as any).storage = createStorageMock();
+    await plugin.init(ctx2 as any);
+
+    // Verify the plugin re-initialized successfully
+    const config = plugin.getConfig();
+    expect(config).toBeDefined();
+    expect(config.provider).toBe("auto");
+
+    // Clean up
+    await plugin.shutdown();
   });
 });
