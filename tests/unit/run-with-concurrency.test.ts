@@ -103,6 +103,32 @@ describe("runWithConcurrency", () => {
     expect(hadErrors).toBe(false);
   });
 
+  it("should return results in submission order, not completion order", async () => {
+    const { results } = await runWithConcurrency(
+      [
+        () => new Promise<string>((r) => setTimeout(() => r("slow"), 50)),
+        () => new Promise<string>((r) => setTimeout(() => r("fast"), 10)),
+        () => new Promise<string>((r) => setTimeout(() => r("medium"), 30)),
+      ],
+      3,
+    );
+    expect(results).toEqual(["slow", "fast", "medium"]);
+  });
+
+  it("should preserve undefined results from successful tasks", async () => {
+    const { results, hadErrors } = await runWithConcurrency<string | undefined>(
+      [
+        () => Promise.resolve("a"),
+        () => Promise.resolve(undefined),
+        () => Promise.resolve("c"),
+      ],
+      3,
+    );
+    expect(hadErrors).toBe(false);
+    expect(results).toEqual(["a", undefined, "c"]);
+    expect(results).toHaveLength(3);
+  });
+
   it("should catch synchronous throws from tasks", async () => {
     const errors: unknown[] = [];
     const { results, hadErrors } = await runWithConcurrency(
