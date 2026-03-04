@@ -156,7 +156,19 @@ async function importNodeLlamaCpp(): Promise<{
   resolveModelFile: (path: string, cacheDir?: string) => Promise<string>;
   LlamaLogLevel: { error: number };
 }> {
-  return await import("node-llama-cpp");
+  try {
+    // Dynamic import for optional dependency. The ambient declaration in
+    // src/types/node-llama-cpp.d.ts satisfies TypeScript so no suppression directive is needed.
+    // Handle both CJS default-export wrapping and ESM named exports.
+    const mod = await import("node-llama-cpp");
+    return (mod as any).default ?? mod;
+  } catch (err) {
+    throw new Error(
+      'Local embedding provider requires the optional dependency "node-llama-cpp". ' +
+        'Install it to use provider="local".',
+      { cause: err },
+    );
+  }
 }
 
 export function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
