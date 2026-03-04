@@ -109,6 +109,7 @@ describe("initialize failure paths", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (savedInstanceId === undefined) {
       delete process.env.WOPR_INSTANCE_ID;
     } else {
@@ -217,7 +218,7 @@ describe("initialize failure paths", () => {
   });
 
   it("warns when no instanceId is configured", async () => {
-    delete process.env.WOPR_INSTANCE_ID;
+    vi.stubEnv("WOPR_INSTANCE_ID", undefined);
 
     await initialize(api, state, queue, log, {
       provider: "openai",
