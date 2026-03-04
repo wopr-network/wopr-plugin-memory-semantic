@@ -1,0 +1,208 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Mock all heavy dependencies so init.ts never touches real FS/network
+vi.mock("../src/a2a-tools.js", () => ({ registerMemoryTools: vi.fn() }));
+vi.mock("../src/core-memory/manager.js", () => ({
+  MemoryIndexManager: { create: vi.fn() },
+}));
+vi.mock("../src/core-memory/session-hook.js", () => ({
+  createSessionDestroyHandler: vi.fn().mockResolvedValue(vi.fn()),
+}));
+vi.mock("../src/core-memory/watcher.js", () => ({
+  startWatcher: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../src/embeddings.js", () => ({
+  createEmbeddingProvider: vi.fn(),
+}));
+vi.mock("../src/search.js", () => ({
+  createSemanticSearchManager: vi.fn(),
+}));
+vi.mock("../src/persistence.js", () => ({
+  loadChunkMetadata: vi.fn().mockResolvedValue(new Map()),
+  getHnswPath: vi.fn().mockReturnValue("/tmp/test.hnsw"),
+  persistNewEntryToDb: vi.fn(),
+}));
+vi.mock("../src/memory-schema.js", () => ({
+  createMemoryPluginSchema: vi.fn().mockReturnValue({}),
+}));
+
+import { initialize } from "../src/init.js";
+import type { InitLogger, PluginState } from "../src/init.js";
+import { MemoryIndexManager } from "../src/core-memory/manager.js";
+import { createEmbeddingProvider } from "../src/embeddings.js";
+import { createSemanticSearchManager } from "../src/search.js";
+import type { EmbeddingQueue } from "../src/embedding-queue.js";
+
+function makeApi() {
+  return {
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    storage: {
+      register: vi.fn().mockResolvedValue(undefined),
+      raw: vi.fn().mockResolvedValue(undefined),
+    },
+    events: { on: vi.fn().mockReturnValue(vi.fn()) },
+  } as any;
+}
+
+function makeState(): PluginState {
+  return {
+    config: {} as any,
+    embeddingProvider: null,
+    searchManager: null,
+    memoryManager: null,
+    api: null,
+    initialized: false,
+    eventCleanup: [],
+    instanceId: undefined,
+  };
+}
+
+function makeLog(): InitLogger {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
+
+function makeQueue(): EmbeddingQueue {
+  return { attach: vi.fn(), bootstrap: vi.fn() } as any;
+}
+
+describe("initialize failure paths", () => {
+  let api: ReturnType<typeof makeApi>;
+  let state: PluginState;
+  let log: InitLogger;
+  let queue: ReturnType<typeof makeQueue>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api = makeApi();
+    state = makeState();
+    log = makeLog();
+    queue = makeQueue();
+
+    // Happy-path defaults (tests override the one they want to break)
+    (MemoryIndexManager.create as any).mockResolvedValue({
+      sync: vi.fn().mockResolvedValue(undefined),
+      search: vi.fn().mockResolvedValue([]),
+    });
+    (createEmbeddingProvider as any).mockResolvedValue({
+      id: "mock-provider",
+      embed: vi.fn().mockResolvedValue([0.1, 0.2]),
+      dimensions: 2,
+    });
+    (createSemanticSearchManager as any).mockResolvedValue({
+      getEntryCount: vi.fn().mockReturnValue(0),
+    });
+  });
+
+  it("logs error when storage.register throws", async () => {
+    api.storage.register.mockRejectedValue(new Error("DB locked"));
+
+    await initialize(api, state, queue as any, log);
+
+    expect(api.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("DB locked"),
+    );
+    expect(state.initialized).toBe(false);
+  });
+
+  it("logs error when FTS5 virtual table creation fails", async () => {
+    api.storage.raw.mockRejectedValueOnce(new Error("FTS5 not available"));
+
+    await initialize(api, state, queue as any, log);
+
+    expect(api.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("FTS5 not available"),
+    );
+    expect(state.initialized).toBe(false);
+  });
+
+  it("logs error when MemoryIndexManager.create throws", async () => {
+    (MemoryIndexManager.create as any).mockRejectedValue(
+      new Error("corrupt index file"),
+    );
+
+    await initialize(api, state, queue as any, log);
+
+    expect(api.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("corrupt index file"),
+    );
+    expect(state.initialized).toBe(false);
+    expect(state.memoryManager).toBeNull();
+  });
+
+  it("logs error when createEmbeddingProvider throws", async () => {
+    (createEmbeddingProvider as any).mockRejectedValue(
+      new Error("No API key found for OpenAI"),
+    );
+
+    await initialize(api, state, queue as any, log);
+
+    expect(api.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("No API key found"),
+    );
+    expect(state.initialized).toBe(false);
+    expect(state.embeddingProvider).toBeNull();
+  });
+
+  it("logs error when createSemanticSearchManager throws", async () => {
+    (createSemanticSearchManager as any).mockRejectedValue(
+      new Error("dimension mismatch: expected 1536, got 384"),
+    );
+
+    await initialize(api, state, queue as any, log);
+
+    expect(api.log.error).toHaveBeenCalledWith(
+      expect.stringContaining("dimension mismatch"),
+    );
+    expect(state.initialized).toBe(false);
+    expect(state.searchManager).toBeNull();
+  });
+
+  it("skips initialization when already initialized", async () => {
+    state.initialized = true;
+
+    await initialize(api, state, queue as any, log);
+
+    // Should return immediately — no storage calls
+    expect(api.storage.register).not.toHaveBeenCalled();
+  });
+
+  it("skips initialization when init is already in progress", async () => {
+    // Call initialize without awaiting to set initInProgress=true
+    const first = initialize(api, state, queue as any, log);
+    // Second call should bail immediately
+    const second = initialize(api, state, queue as any, log);
+
+    await first;
+    await second;
+
+    // storage.register called exactly once (from first call)
+    expect(api.storage.register).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets initInProgress flag even after failure", async () => {
+    api.storage.register.mockRejectedValue(new Error("fail"));
+
+    await initialize(api, state, queue as any, log);
+
+    // initInProgress should be false again — a fresh state can init
+    const freshState = makeState();
+    api.storage.register.mockResolvedValue(undefined);
+
+    await initialize(api, freshState, queue as any, log);
+
+    expect(freshState.initialized).toBe(true);
+  });
+
+  it("warns when no instanceId is configured", async () => {
+    delete process.env.WOPR_INSTANCE_ID;
+
+    await initialize(api, state, queue as any, log, {
+      provider: "openai",
+      model: "test",
+    } as any);
+
+    expect(api.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("multi-tenant isolation DISABLED"),
+    );
+  });
+}); // end describe
