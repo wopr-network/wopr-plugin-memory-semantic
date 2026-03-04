@@ -178,14 +178,15 @@ async function migrateFromLegacyIndexSqlite(storage: StorageApi): Promise<void> 
       });
 
     await storage.raw(`DETACH DATABASE legacy`);
-
-    // Rename old DB to mark as migrated (don't delete — safety net)
-    renameSync(legacyDbPath, `${legacyDbPath}.migrated`);
   } catch (err) {
-    // If ATTACH fails, try manual approach or log and skip
+    // If ATTACH or migration SQL fails, detach and rethrow
     try {
       await storage.raw(`DETACH DATABASE legacy`);
     } catch {}
     throw err;
   }
+
+  // Rename old DB to mark as migrated (don't delete — safety net).
+  // This runs after DETACH so a rename failure cannot leave the DB attached.
+  renameSync(legacyDbPath, `${legacyDbPath}.migrated`);
 }
