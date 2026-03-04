@@ -5,10 +5,19 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
+
+/** Throw if filePath escapes baseDir. */
+function assertWithinBase(baseDir: string, filePath: string): void {
+  const resolvedBase = resolve(baseDir);
+  const resolvedPath = resolve(filePath);
+  if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + sep)) {
+    throw new Error("Path outside allowed directory");
+  }
+}
 
 // Helper to resolve memory files
 function resolveMemoryFile(
@@ -17,10 +26,12 @@ function resolveMemoryFile(
   globalMemoryDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
   const globalPath = join(globalMemoryDir, filename);
+  assertWithinBase(globalMemoryDir, globalPath);
   if (existsSync(globalPath)) {
     return { path: globalPath, exists: true, isGlobal: true };
   }
   const sessionPath = join(sessionDir, "memory", filename);
+  assertWithinBase(join(sessionDir, "memory"), sessionPath);
   if (existsSync(sessionPath)) {
     return { path: sessionPath, exists: true, isGlobal: false };
   }
@@ -33,10 +44,12 @@ function resolveRootFile(
   globalIdentityDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
   const globalPath = join(globalIdentityDir, filename);
+  assertWithinBase(globalIdentityDir, globalPath);
   if (existsSync(globalPath)) {
     return { path: globalPath, exists: true, isGlobal: true };
   }
   const sessionPath = join(sessionDir, filename);
+  assertWithinBase(sessionDir, sessionPath);
   if (existsSync(sessionPath)) {
     return { path: sessionPath, exists: true, isGlobal: false };
   }
@@ -97,92 +110,100 @@ export function registerMemoryTools(
       },
     },
     handler: async (args: { file?: string; from?: number; lines?: number; days?: number }, context: any) => {
-      const { file, days = 7, from, lines: lineCount } = args;
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
+      try {
+        const { file, days = 7, from, lines: lineCount } = args;
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
 
-      if (!file) {
-        const files: string[] = listAllMemoryFiles(sessionDir, GLOBAL_MEMORY_DIR);
-        for (const f of ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md"]) {
-          const resolved = resolveRootFile(sessionDir, f, GLOBAL_IDENTITY_DIR);
-          if (resolved.exists && !files.includes(f)) files.push(f);
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: files.length > 0 ? `Available memory files:\n${files.join("\n")}` : "No memory files found.",
-            },
-          ],
-        };
-      }
-
-      if (file === "recent" || file === "daily") {
-        const dailyFiles: { name: string; path: string }[] = [];
-        if (existsSync(GLOBAL_MEMORY_DIR)) {
-          for (const f of readdirSync(GLOBAL_MEMORY_DIR).filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))) {
-            dailyFiles.push({ name: f, path: join(GLOBAL_MEMORY_DIR, f) });
+        if (!file) {
+          const files: string[] = listAllMemoryFiles(sessionDir, GLOBAL_MEMORY_DIR);
+          for (const f of ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md"]) {
+            const resolved = resolveRootFile(sessionDir, f, GLOBAL_IDENTITY_DIR);
+            if (resolved.exists && !files.includes(f)) files.push(f);
           }
+          return {
+            content: [
+              {
+                type: "text",
+                text: files.length > 0 ? `Available memory files:\n${files.join("\n")}` : "No memory files found.",
+              },
+            ],
+          };
         }
-        const sessionMemoryDir = join(sessionDir, "memory");
-        if (existsSync(sessionMemoryDir)) {
-          readdirSync(sessionMemoryDir)
-            .filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
-            .forEach((f: string) => {
-              const idx = dailyFiles.findIndex((d) => d.name === f);
-              if (idx >= 0) dailyFiles[idx].path = join(sessionMemoryDir, f);
-              else dailyFiles.push({ name: f, path: join(sessionMemoryDir, f) });
-            });
+
+        if (file === "recent" || file === "daily") {
+          const dailyFiles: { name: string; path: string }[] = [];
+          if (existsSync(GLOBAL_MEMORY_DIR)) {
+            for (const f of readdirSync(GLOBAL_MEMORY_DIR).filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))) {
+              dailyFiles.push({ name: f, path: join(GLOBAL_MEMORY_DIR, f) });
+            }
+          }
+          const sessionMemoryDir = join(sessionDir, "memory");
+          if (existsSync(sessionMemoryDir)) {
+            readdirSync(sessionMemoryDir)
+              .filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
+              .forEach((f: string) => {
+                const idx = dailyFiles.findIndex((d) => d.name === f);
+                if (idx >= 0) dailyFiles[idx].path = join(sessionMemoryDir, f);
+                else dailyFiles.push({ name: f, path: join(sessionMemoryDir, f) });
+              });
+          }
+          dailyFiles.sort((a, b) => a.name.localeCompare(b.name));
+          const recent = dailyFiles.slice(-days);
+          if (recent.length === 0) return { content: [{ type: "text", text: "No daily memory files yet." }] };
+          const contents = recent
+            .map(({ name, path }) => {
+              const content = readFileSync(path, "utf-8");
+              return `## ${name.replace(".md", "")}\n\n${content}`;
+            })
+            .join("\n\n---\n\n");
+          return { content: [{ type: "text", text: contents }] };
         }
-        dailyFiles.sort((a, b) => a.name.localeCompare(b.name));
-        const recent = dailyFiles.slice(-days);
-        if (recent.length === 0) return { content: [{ type: "text", text: "No daily memory files yet." }] };
-        const contents = recent
-          .map(({ name, path }) => {
-            const content = readFileSync(path, "utf-8");
-            return `## ${name.replace(".md", "")}\n\n${content}`;
-          })
-          .join("\n\n---\n\n");
-        return { content: [{ type: "text", text: contents }] };
-      }
 
-      const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
-      let filePath: string;
-      if (rootFiles.includes(file)) {
-        const resolved = resolveRootFile(sessionDir, file, GLOBAL_IDENTITY_DIR);
-        if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
-        filePath = resolved.path;
-      } else {
-        const resolved = resolveMemoryFile(sessionDir, file, GLOBAL_MEMORY_DIR);
-        if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
-        filePath = resolved.path;
-      }
+        const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
+        let filePath: string;
+        if (rootFiles.includes(file)) {
+          const resolved = resolveRootFile(sessionDir, file, GLOBAL_IDENTITY_DIR);
+          if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
+          filePath = resolved.path;
+        } else {
+          const resolved = resolveMemoryFile(sessionDir, file, GLOBAL_MEMORY_DIR);
+          if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
+          filePath = resolved.path;
+        }
 
-      const content = readFileSync(filePath, "utf-8");
-      if (from !== undefined && from > 0) {
-        const allLines = content.split("\n");
-        const startIdx = Math.max(0, from - 1);
-        const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  path: file,
-                  from: startIdx + 1,
-                  to: endIdx,
-                  totalLines: allLines.length,
-                  text: allLines.slice(startIdx, endIdx).join("\n"),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        const content = readFileSync(filePath, "utf-8");
+        if (from !== undefined && from > 0) {
+          const allLines = content.split("\n");
+          const startIdx = Math.max(0, from - 1);
+          const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    path: file,
+                    from: startIdx + 1,
+                    to: endIdx,
+                    totalLines: allLines.length,
+                    text: allLines.slice(startIdx, endIdx).join("\n"),
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+        return { content: [{ type: "text", text: content }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message === "Path outside allowed directory") {
+          return { content: [{ type: "text", text: message }], isError: true };
+        }
+        throw err;
       }
-      return { content: [{ type: "text", text: content }] };
     },
   });
 
@@ -200,27 +221,36 @@ export function registerMemoryTools(
       required: ["file", "content"],
     },
     handler: async (args: { file: string; content: string; append?: boolean }, context: any) => {
-      const { file, content, append } = args;
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
-      const memoryDir = join(sessionDir, "memory");
-      if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true });
+      try {
+        const { file, content, append } = args;
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
+        const memoryDir = join(sessionDir, "memory");
+        if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true });
 
-      let filename = file;
-      if (file === "today") filename = `${new Date().toISOString().split("T")[0]}.md`;
+        let filename = file;
+        if (file === "today") filename = `${new Date().toISOString().split("T")[0]}.md`;
 
-      const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
-      const filePath = rootFiles.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
-      const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
+        const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
+        const filePath = rootFiles.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
+        assertWithinBase(rootFiles.includes(filename) ? sessionDir : memoryDir, filePath);
+        const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
-      if (shouldAppend && existsSync(filePath)) {
-        const existing = readFileSync(filePath, "utf-8");
-        writeFileSync(filePath, `${existing}\n\n${content}`);
-      } else {
-        writeFileSync(filePath, content);
+        if (shouldAppend && existsSync(filePath)) {
+          const existing = readFileSync(filePath, "utf-8");
+          writeFileSync(filePath, `${existing}\n\n${content}`);
+        } else {
+          writeFileSync(filePath, content);
+        }
+
+        return { content: [{ type: "text", text: `${shouldAppend ? "Appended to" : "Wrote"} ${filename}` }] };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message === "Path outside allowed directory") {
+          return { content: [{ type: "text", text: message }], isError: true };
+        }
+        throw err;
       }
-
-      return { content: [{ type: "text", text: `${shouldAppend ? "Appended to" : "Wrote"} ${filename}` }] };
     },
   });
 
@@ -305,50 +335,62 @@ export function registerMemoryTools(
       required: ["path"],
     },
     handler: async (args: { path: string; from?: number; lines?: number }, context: any) => {
-      const { path: relPath, from, lines: lineCount } = args;
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
-      const memoryDir = join(sessionDir, "memory");
+      try {
+        const { path: relPath, from, lines: lineCount } = args;
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
+        const memoryDir = join(sessionDir, "memory");
 
-      let filePath = join(sessionDir, relPath);
-      if (!existsSync(filePath)) filePath = join(memoryDir, relPath);
-      if (!existsSync(filePath))
-        return { content: [{ type: "text", text: `File not found: ${relPath}` }], isError: true };
+        let filePath = join(sessionDir, relPath);
+        assertWithinBase(sessionDir, filePath);
+        if (!existsSync(filePath)) {
+          filePath = join(memoryDir, relPath);
+          assertWithinBase(memoryDir, filePath);
+        }
+        if (!existsSync(filePath))
+          return { content: [{ type: "text", text: `File not found: ${relPath}` }], isError: true };
 
-      const content = readFileSync(filePath, "utf-8");
-      const allLines = content.split("\n");
+        const content = readFileSync(filePath, "utf-8");
+        const allLines = content.split("\n");
 
-      if (from !== undefined && from > 0) {
-        const startIdx = Math.max(0, from - 1);
-        const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
+        if (from !== undefined && from > 0) {
+          const startIdx = Math.max(0, from - 1);
+          const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    path: relPath,
+                    from: startIdx + 1,
+                    to: endIdx,
+                    totalLines: allLines.length,
+                    text: allLines.slice(startIdx, endIdx).join("\n"),
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(
-                {
-                  path: relPath,
-                  from: startIdx + 1,
-                  to: endIdx,
-                  totalLines: allLines.length,
-                  text: allLines.slice(startIdx, endIdx).join("\n"),
-                },
-                null,
-                2,
-              ),
+              text: JSON.stringify({ path: relPath, totalLines: allLines.length, text: content }, null, 2),
             },
           ],
         };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message === "Path outside allowed directory") {
+          return { content: [{ type: "text", text: message }], isError: true };
+        }
+        throw err;
       }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ path: relPath, totalLines: allLines.length, text: content }, null, 2),
-          },
-        ],
-      };
     },
   });
 
