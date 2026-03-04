@@ -106,6 +106,8 @@ describe("a2a tool handlers", () => {
   let registeredTools: Record<string, { inputSchema: unknown; handler: Function }>;
   let mockCtx: any;
   let mockManager: any;
+  let origWoprHome: string | undefined;
+  let origGlobalIdentity: string | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "a2a-tools-test-"));
@@ -115,6 +117,8 @@ describe("a2a tool handlers", () => {
     mkdirSync(sessionsDir, { recursive: true });
     mkdirSync(globalMemoryDir, { recursive: true });
 
+    origWoprHome = process.env.WOPR_HOME;
+    origGlobalIdentity = process.env.WOPR_GLOBAL_IDENTITY;
     process.env.WOPR_HOME = tmpDir;
     process.env.WOPR_GLOBAL_IDENTITY = globalIdentityDir;
 
@@ -133,8 +137,16 @@ describe("a2a tool handlers", () => {
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.WOPR_HOME;
-    delete process.env.WOPR_GLOBAL_IDENTITY;
+    if (origWoprHome === undefined) {
+      delete process.env.WOPR_HOME;
+    } else {
+      process.env.WOPR_HOME = origWoprHome;
+    }
+    if (origGlobalIdentity === undefined) {
+      delete process.env.WOPR_GLOBAL_IDENTITY;
+    } else {
+      process.env.WOPR_GLOBAL_IDENTITY = origGlobalIdentity;
+    }
   });
 
   const getHandler = (name: string) => registeredTools[name].handler;
@@ -224,7 +236,9 @@ describe("a2a tool handlers", () => {
     });
 
     it("memory_read rejects absolute path", async () => {
-      const result = await getHandler("memory_read")({ file: "/etc/passwd" }, ctx());
+      const outside = join(tmpDir, "outside.md");
+      writeFileSync(outside, "nope");
+      const result = await getHandler("memory_read")({ file: outside }, ctx());
       expect(result.isError).toBe(true);
     });
 
@@ -256,7 +270,9 @@ describe("a2a tool handlers", () => {
     });
 
     it("memory_get rejects absolute path", async () => {
-      const result = await getHandler("memory_get")({ path: "/etc/passwd" }, ctx());
+      const outside = join(tmpDir, "outside.md");
+      writeFileSync(outside, "nope");
+      const result = await getHandler("memory_get")({ path: outside }, ctx());
       expect(result.isError).toBe(true);
     });
 
@@ -372,12 +388,18 @@ describe("a2a tool handlers", () => {
     });
 
     it("reads daily logs with file='recent'", async () => {
-      const sessionMemory = join(sessionsDir, "test-session", "memory");
-      const today = new Date().toISOString().split("T")[0];
-      writeFileSync(join(sessionMemory, `${today}.md`), "today's log");
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-04T12:00:00Z"));
+      try {
+        const sessionMemory = join(sessionsDir, "test-session", "memory");
+        const today = "2026-03-04";
+        writeFileSync(join(sessionMemory, `${today}.md`), "today's log");
 
-      const result = await getHandler("memory_read")({ file: "recent", days: 1 }, ctx());
-      expect(result.content[0].text).toContain("today's log");
+        const result = await getHandler("memory_read")({ file: "recent", days: 1 }, ctx());
+        expect(result.content[0].text).toContain("today's log");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("returns 'No daily memory files yet' when none exist", async () => {
@@ -434,14 +456,20 @@ describe("a2a tool handlers", () => {
     });
 
     it("auto-appends for date-named files (today)", async () => {
-      const today = new Date().toISOString().split("T")[0];
-      const filePath = join(sessionsDir, "test-session", "memory", `${today}.md`);
-      writeFileSync(filePath, "morning");
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-04T12:00:00Z"));
+      try {
+        const today = "2026-03-04";
+        const filePath = join(sessionsDir, "test-session", "memory", `${today}.md`);
+        writeFileSync(filePath, "morning");
 
-      await getHandler("memory_write")({ file: "today", content: "evening" }, ctx());
-      const content = readFileSync(filePath, "utf-8");
-      expect(content).toContain("morning");
-      expect(content).toContain("evening");
+        await getHandler("memory_write")({ file: "today", content: "evening" }, ctx());
+        const content = readFileSync(filePath, "utf-8");
+        expect(content).toContain("morning");
+        expect(content).toContain("evening");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("writes ROOT_FILES to session root", async () => {
