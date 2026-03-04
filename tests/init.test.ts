@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock all heavy dependencies so init.ts never touches real FS/network
 vi.mock("../src/a2a-tools.js", () => ({ registerMemoryTools: vi.fn() }));
@@ -71,12 +71,15 @@ describe("initialize failure paths", () => {
   let log: InitLogger;
   let queue: ReturnType<typeof makeQueue>;
 
+  let savedInstanceId: string | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
     api = makeApi();
     state = makeState();
     log = makeLog();
     queue = makeQueue();
+    savedInstanceId = process.env.WOPR_INSTANCE_ID;
 
     // Happy-path defaults (tests override the one they want to break)
     (MemoryIndexManager.create as any).mockResolvedValue({
@@ -91,6 +94,11 @@ describe("initialize failure paths", () => {
     (createSemanticSearchManager as any).mockResolvedValue({
       getEntryCount: vi.fn().mockReturnValue(0),
     });
+  });
+
+  afterEach(() => {
+    if (savedInstanceId === undefined) delete process.env.WOPR_INSTANCE_ID;
+    else process.env.WOPR_INSTANCE_ID = savedInstanceId;
   });
 
   it("logs error when storage.register throws", async () => {
