@@ -99,8 +99,7 @@ function buildTemporalFilter(temporal: TemporalFilter | undefined, alias?: strin
  * listMemoryFiles() expects a workspace dir and looks for memory/ inside it.
  * Exported so other modules (e.g. a2a-mcp) can discover these dirs independently.
  */
-export async function discoverSessionMemoryDirs(): Promise<string[]> {
-  const sessionsBase = "/data/sessions";
+export async function discoverSessionMemoryDirs(sessionsBase: string): Promise<string[]> {
   const dirs: string[] = [];
   try {
     const entries = await fs.readdir(sessionsBase, { withFileTypes: true });
@@ -338,7 +337,7 @@ export class MemoryIndexManager {
     }
 
     // Session memory files (current session + all session memory dirs)
-    const sessionMemoryDirs = await discoverSessionMemoryDirs();
+    const sessionMemoryDirs = await discoverSessionMemoryDirs(this.sessionsDir);
     this.log.info(`[memory-sync] session dirs: ${sessionMemoryDirs.length} (heap: ${heapMB()}MB)`);
     const sessionChanges = await this.scanMemoryFiles({
       dirs: [this.sessionDir, ...sessionMemoryDirs],
