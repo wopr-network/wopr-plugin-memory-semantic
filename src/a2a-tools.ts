@@ -26,7 +26,6 @@ export const MEMORY_WRITE_MAX_BYTES = 1_048_576; // 1 MB
 const MEMORY_APPEND_SEPARATOR = "\n\n";
 const MEMORY_APPEND_SEPARATOR_BYTES = Buffer.byteLength(MEMORY_APPEND_SEPARATOR, "utf-8");
 
-
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
   constructor(message = "Path outside allowed directory") {
