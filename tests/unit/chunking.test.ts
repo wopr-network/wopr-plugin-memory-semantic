@@ -5,26 +5,25 @@ const META = { path: "test.ts", startLine: 1, endLine: 10, source: "test" };
 
 describe("multiScaleChunk", () => {
   describe("empty and short input", () => {
-    it("returns no canonical entry for empty string", () => {
+    it("returns no entries for empty string", () => {
       const result = multiScaleChunk("", "id1", META, [{ tokens: 50, overlap: 10 }]);
-      // canonical entry requires trim().length >= 10; scale entry still emitted (fits in one chunk)
+      // Both canonical and scale entries require trim().length >= 10
       expect(result.some((e) => e.entry.id === "id1")).toBe(false);
-      expect(result.some((e) => e.entry.id === "id1-s50")).toBe(true);
+      expect(result.some((e) => e.entry.id === "id1-s50")).toBe(false);
     });
 
-    it("returns no canonical entry for whitespace-only string", () => {
+    it("returns no entries for whitespace-only string", () => {
       const result = multiScaleChunk("         ", "id1", META, [{ tokens: 50, overlap: 10 }]);
-      // canonical entry requires trim().length >= 10; scale entry still emitted (fits in one chunk)
+      // Both canonical and scale entries require trim().length >= 10
       expect(result.some((e) => e.entry.id === "id1")).toBe(false);
-      expect(result.some((e) => e.entry.id === "id1-s50")).toBe(true);
+      expect(result.some((e) => e.entry.id === "id1-s50")).toBe(false);
     });
 
-    it("does not emit canonical entry for string shorter than 10 chars after trim", () => {
+    it("does not emit any entry for string shorter than 10 chars after trim", () => {
       const result = multiScaleChunk("short", "id1", META, [{ tokens: 50, overlap: 10 }]);
-      // canonical entry requires trim().length >= 10
+      // Both canonical and single-chunk scale entries require trim().length >= 10
       expect(result.some((e) => e.entry.id === "id1")).toBe(false);
-      // scale entry IS emitted (single-chunk path has no trim check)
-      expect(result.some((e) => e.entry.id === "id1-s50")).toBe(true);
+      expect(result.some((e) => e.entry.id === "id1-s50")).toBe(false);
     });
 
     it("returns canonical + scale entry for input exactly 10 chars after trim", () => {
@@ -192,6 +191,19 @@ describe("multiScaleChunk", () => {
       expect(result.some((e) => e.entry.id.includes("-s50"))).toBe(true);
     });
 
+    it("canonical entry uses valid scale when invalid scale is listed first (tokens=0)", () => {
+      const text = "Valid text for testing this edge case.";
+      const result = multiScaleChunk(text, "id1", META, [
+        { tokens: 0, overlap: 0 },
+        { tokens: 50, overlap: 0 },
+      ]);
+      const canonical = result.find((e) => e.entry.id === "id1");
+      expect(canonical).toBeDefined();
+      // Canonical content must be non-empty (derived from valid scale tokens=50, maxChars=200)
+      expect(canonical!.entry.content.length).toBeGreaterThan(0);
+      expect(canonical!.entry.content).toBe(text);
+    });
+
     it("skips scale with negative tokens", () => {
       const text = "Valid text for testing this edge case.";
       const result = multiScaleChunk(text, "id1", META, [
@@ -200,6 +212,18 @@ describe("multiScaleChunk", () => {
       ]);
       expect(result.some((e) => e.entry.id.includes("-s-5"))).toBe(false);
       expect(result.some((e) => e.entry.id.includes("-s50"))).toBe(true);
+    });
+
+    it("canonical entry uses valid scale when invalid scale is listed first (negative tokens)", () => {
+      const text = "Valid text for testing this edge case.";
+      const result = multiScaleChunk(text, "id1", META, [
+        { tokens: -5, overlap: 0 },
+        { tokens: 50, overlap: 0 },
+      ]);
+      const canonical = result.find((e) => e.entry.id === "id1");
+      expect(canonical).toBeDefined();
+      // Canonical content must be non-empty (derived from valid scale tokens=50, maxChars=200)
+      expect(canonical!.entry.content.length).toBeGreaterThan(0);
     });
 
     it("skips scale with NaN tokens", () => {
@@ -229,6 +253,17 @@ describe("multiScaleChunk", () => {
       const chunksNaN = resultNaN.filter((e) => e.entry.id.startsWith("id1-s10-"));
       const chunksZero = resultZero.filter((e) => e.entry.id.startsWith("id2-s10-"));
       expect(chunksNaN.length).toBe(chunksZero.length);
+    });
+
+    it("treats negative overlap as zero (clamped)", () => {
+      // tokens=10 => maxChars=40; text=120 chars => 3 chunks at zero overlap
+      // Without clamping, overlap=-5 => overlapChars=-20 => stride=60, only 2 chunks
+      const text = "H".repeat(120);
+      const resultNegative = multiScaleChunk(text, "id1", META, [{ tokens: 10, overlap: -5 }]);
+      const resultZero = multiScaleChunk(text, "id2", META, [{ tokens: 10, overlap: 0 }]);
+      const chunksNegative = resultNegative.filter((e) => e.entry.id.startsWith("id1-s10-"));
+      const chunksZero = resultZero.filter((e) => e.entry.id.startsWith("id2-s10-"));
+      expect(chunksNegative.length).toBe(chunksZero.length);
     });
   });
 
