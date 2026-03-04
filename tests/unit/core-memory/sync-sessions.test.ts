@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PluginLogger, StorageApi } from "@wopr-network/plugin-types";
+import { mockLogger, mockStorage } from "./helpers.js";
 
 vi.mock("../../../src/core-memory/session-files.js", () => ({
   listSessionNames: vi.fn(),
@@ -8,22 +9,6 @@ vi.mock("../../../src/core-memory/session-files.js", () => ({
 
 import { listSessionNames, buildSessionEntryFromSql } from "../../../src/core-memory/session-files.js";
 import { syncSessionFiles } from "../../../src/core-memory/sync-sessions.js";
-
-function mockLogger(): PluginLogger {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  } as unknown as PluginLogger;
-}
-
-function mockStorage(): StorageApi {
-  return {
-    raw: vi.fn().mockResolvedValue([]),
-    transaction: vi.fn().mockImplementation(async (fn: () => Promise<void>) => fn()),
-  } as unknown as StorageApi;
-}
 
 function mockSessionApi() {
   return {

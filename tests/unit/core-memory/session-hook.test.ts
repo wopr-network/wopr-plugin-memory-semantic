@@ -1,15 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { PluginLogger } from "@wopr-network/plugin-types";
+import { mockLogger } from "./helpers.js";
 import { createSessionDestroyHandler } from "../../../src/core-memory/session-hook.js";
-
-function mockLogger(): PluginLogger {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  } as unknown as PluginLogger;
-}
 
 function mockSessionApi() {
   return {

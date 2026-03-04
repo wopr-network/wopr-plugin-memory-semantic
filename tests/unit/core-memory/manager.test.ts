@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PluginLogger, StorageApi, WOPREventBus } from "@wopr-network/plugin-types";
+import { mockLogger, mockStorage, mockEvents } from "./helpers.js";
 
 // Mock internal module dependencies
 vi.mock("../../../src/core-memory/internal.js", async (importOriginal) => {
@@ -25,40 +26,6 @@ vi.mock("node:fs/promises", () => ({
 
 import { MemoryIndexManager } from "../../../src/core-memory/manager.js";
 
-function mockLogger(): PluginLogger {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  } as unknown as PluginLogger;
-}
-
-function mockStorage(): StorageApi {
-  return {
-    raw: vi.fn().mockResolvedValue([]),
-    transaction: vi.fn().mockImplementation(async (fn: () => Promise<void>) => fn()),
-  } as unknown as StorageApi;
-}
-
-function mockEvents(): WOPREventBus {
-  const handlers = new Map<string, Array<(event: unknown) => unknown>>();
-  return {
-    on: vi.fn().mockImplementation((event: string, handler: (e: unknown) => unknown) => {
-      if (!handlers.has(event)) handlers.set(event, []);
-      handlers.get(event)!.push(handler);
-      return () => {
-        const arr = handlers.get(event);
-        if (arr) {
-          const idx = arr.indexOf(handler);
-          if (idx !== -1) arr.splice(idx, 1);
-        }
-      };
-    }),
-    emit: vi.fn().mockResolvedValue(undefined),
-    off: vi.fn(),
-  } as unknown as WOPREventBus;
-}
 
 async function createManager(overrides?: {
   storage?: StorageApi;

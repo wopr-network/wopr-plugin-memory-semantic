@@ -23,7 +23,8 @@ export async function startWatcher(params: {
   }
 
   try {
-    // Dynamic import to avoid loading chokidar unless needed
+    // Dynamic import to avoid loading chokidar unless needed.
+    // Uses a standard await import() so vi.mock("chokidar") can intercept it in tests.
     interface ChokidarWatchOptions {
       ignored?: RegExp | ((path: string) => boolean);
       persistent?: boolean;
@@ -33,9 +34,9 @@ export async function startWatcher(params: {
         pollInterval: number;
       };
     }
-    const chokidar = await (Function('return import("chokidar")')() as Promise<{
+    const chokidar = (await import("chokidar")) as unknown as {
       watch: (paths: string[], options: ChokidarWatchOptions) => FSWatcher;
-    }>);
+    };
 
     watcher = chokidar.watch(params.dirs, {
       ignored: /(^|[/\\])\../, // Ignore dotfiles
