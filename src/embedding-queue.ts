@@ -166,7 +166,7 @@ export class EmbeddingQueue {
     }
     // Wait for any in-flight drain to finish (it will exit because stopped=true)
     if (this.drainPromise) {
-      await this.drainPromise;
+      await this.drainPromise.catch(() => {});
       this.drainPromise = null;
     }
     this.queue = [];
