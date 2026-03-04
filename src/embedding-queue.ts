@@ -21,6 +21,7 @@ export class EmbeddingQueue {
   private stopped = false;
   private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffResolve: (() => void) | null = null;
+  private drainPromise: Promise<void> | null = null;
   private searchManager: SemanticSearchManager | null = null;
   private persistFn: PersistFn | null = null;
   private log: EmbeddingQueueLogger;
@@ -57,7 +58,12 @@ export class EmbeddingQueue {
       added++;
     }
     this.log.info(`[queue] enqueued ${added} entries from ${source} (${this.queue.length} total pending)`);
-    this.drain();
+    if (!this.drainPromise) {
+      const p = this.drain().finally(() => {
+        if (this.drainPromise === p) this.drainPromise = null;
+      });
+      this.drainPromise = p;
+    }
   }
 
   /** Run bootstrap: enqueue all chunks and process to completion before anything else. */
@@ -148,7 +154,7 @@ export class EmbeddingQueue {
     });
   }
 
-  clear(): void {
+  async clear(): Promise<void> {
     this.stopped = true;
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
@@ -157,6 +163,11 @@ export class EmbeddingQueue {
     if (this.backoffResolve !== null) {
       this.backoffResolve();
       this.backoffResolve = null;
+    }
+    // Wait for any in-flight drain to finish (it will exit because stopped=true)
+    if (this.drainPromise) {
+      await this.drainPromise;
+      this.drainPromise = null;
     }
     this.queue = [];
     this.processing = false;

@@ -219,7 +219,7 @@ const plugin: WOPRPlugin & {
     const shutdownLog = ctx.log;
 
     // Stop the embedding queue first
-    embeddingQueue.clear();
+    await embeddingQueue.clear();
 
     // Stop file watcher
     await stopWatcher(shutdownLog);
