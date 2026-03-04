@@ -147,7 +147,10 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
       },
     },
     handler: async (params: Record<string, unknown>, auth: AuthContext) => {
-      const query = params.query as string;
+      if (typeof params.query !== "string") {
+        throw new Error("Parameter 'query' must be a string");
+      }
+      const query = params.query;
       if (!query) {
         throw new Error("Parameter 'query' is required");
       }
