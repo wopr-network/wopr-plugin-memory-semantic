@@ -20,6 +20,11 @@ import { initialize, type PluginState } from "./init.js";
 import { contentHash, memoryContextProvider, pluginConfigSchema, pluginManifest } from "./manifest.js";
 import type { MemorySearchResult, SemanticMemoryConfig, SessionApi } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
+import type { WebMCPRegistryLike } from "./webmcp.js";
+import {
+  registerMemoryTools as registerWebMCPTools,
+  unregisterMemoryTools as unregisterWebMCPTools,
+} from "./webmcp.js";
 
 /**
  * Extended plugin context — adds the optional `memory` extension that
@@ -32,6 +37,7 @@ interface PluginContext extends WOPRPluginContext {
   };
   registerTool?(tool: any): void;
   session?: SessionApi;
+  webmcpRegistry?: WebMCPRegistryLike;
 }
 
 let ctx: PluginContext | null = null;
@@ -175,6 +181,16 @@ const plugin: WOPRPlugin & {
     if (ctx.registerExtension) {
       ctx.registerExtension("memory-semantic", extensionApi);
       cleanups.push(() => ctx?.unregisterExtension?.("memory-semantic"));
+    }
+
+    // Register WebMCP browser-side tools if the platform exposes a registry
+    if (ctx.webmcpRegistry) {
+      const registry = ctx.webmcpRegistry;
+      registerWebMCPTools(registry, "/api", state.instanceId);
+      cleanups.push(() => {
+        unregisterWebMCPTools(registry);
+      });
+      log.info("[semantic-memory] Registered WebMCP browser tools");
     }
 
     // Register hooks via the event bus — store cleanup functions for shutdown
