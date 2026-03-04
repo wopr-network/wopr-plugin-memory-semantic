@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { registerMemoryTools } from "../../src/a2a-tools.js";
+import { registerMemoryTools, validateSessionName } from "../../src/a2a-tools.js";
 
 // Minimal mock context with registerTool
 function createMockCtx() {
@@ -125,15 +125,9 @@ describe("A2A tools path traversal protection", () => {
   });
 
   describe("sessionName validation", () => {
-    it("accepts valid session names", async () => {
-      const tool = ctx.tools["memory_read"];
+    it("accepts valid session names", () => {
       for (const name of ["default", "my-session", "session_123", "A", "a".repeat(64)]) {
-        // Create session dir for valid names so it doesn't fail on missing dir
-        const dir = join(sessionsDir, name, "memory");
-        mkdirSync(dir, { recursive: true });
-        await expect(
-          tool.handler({ file: "SELF.md" }, { sessionName: name })
-        ).resolves.toBeDefined();
+        expect(() => validateSessionName(name)).not.toThrow();
       }
     });
 

@@ -28,7 +28,7 @@ export class PathTraversalError extends Error {
 const SAFE_SESSION_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 
 /** Windows reserved device names (case-insensitive) */
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 /**
  * Validate that a session name is a safe filesystem identifier.
