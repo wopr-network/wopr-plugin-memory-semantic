@@ -31,7 +31,10 @@ import type { InitLogger, PluginState } from "../src/init.js";
 import { MemoryIndexManager } from "../src/core-memory/manager.js";
 import { createEmbeddingProvider } from "../src/embeddings.js";
 import { createSemanticSearchManager } from "../src/search.js";
-import type { EmbeddingQueue } from "../src/embedding-queue.js";
+import { DEFAULT_CONFIG } from "../src/types.js";
+import type { EmbeddingProvider } from "../src/types.js";
+import type { SemanticSearchManager } from "../src/search.js";
+import { EmbeddingQueue } from "../src/embedding-queue.js";
 
 function makeApi() {
   return {
@@ -41,12 +44,12 @@ function makeApi() {
       raw: vi.fn().mockResolvedValue(undefined),
     },
     events: { on: vi.fn().mockReturnValue(vi.fn()) },
-  } as any;
+  } as unknown as Parameters<typeof initialize>[0];
 }
 
 function makeState(): PluginState {
   return {
-    config: {} as any,
+    config: DEFAULT_CONFIG,
     embeddingProvider: null,
     searchManager: null,
     memoryManager: null,
@@ -62,14 +65,18 @@ function makeLog(): InitLogger {
 }
 
 function makeQueue(): EmbeddingQueue {
-  return { attach: vi.fn(), bootstrap: vi.fn() } as any;
+  return {
+    attach: vi.fn(),
+    bootstrap: vi.fn().mockResolvedValue(0),
+  } as unknown as EmbeddingQueue;
 }
 
 describe("initialize failure paths", () => {
   let api: ReturnType<typeof makeApi>;
   let state: PluginState;
   let log: InitLogger;
-  let queue: ReturnType<typeof makeQueue>;
+  let queue: EmbeddingQueue;
+  let savedInstanceId: string | undefined;
 
   let savedInstanceId: string | undefined;
 
@@ -82,18 +89,33 @@ describe("initialize failure paths", () => {
     savedInstanceId = process.env.WOPR_INSTANCE_ID;
 
     // Happy-path defaults (tests override the one they want to break)
-    (MemoryIndexManager.create as any).mockResolvedValue({
+    vi.mocked(MemoryIndexManager.create).mockResolvedValue({
       sync: vi.fn().mockResolvedValue(undefined),
       search: vi.fn().mockResolvedValue([]),
-    });
-    (createEmbeddingProvider as any).mockResolvedValue({
+    } as unknown as MemoryIndexManager);
+    vi.mocked(createEmbeddingProvider).mockResolvedValue({
       id: "mock-provider",
-      embed: vi.fn().mockResolvedValue([0.1, 0.2]),
-      dimensions: 2,
-    });
-    (createSemanticSearchManager as any).mockResolvedValue({
+      model: "test-model",
+      embedQuery: vi.fn<[string], Promise<number[]>>().mockResolvedValue([0.1, 0.2]),
+      embedBatch: vi.fn<[string[]], Promise<number[][]>>().mockResolvedValue([[0.1, 0.2]]),
+    } satisfies EmbeddingProvider);
+    vi.mocked(createSemanticSearchManager).mockResolvedValue({
       getEntryCount: vi.fn().mockReturnValue(0),
-    });
+      search: vi.fn().mockResolvedValue([]),
+      addEntry: vi.fn().mockResolvedValue(undefined),
+      addEntriesBatch: vi.fn().mockResolvedValue(0),
+      close: vi.fn().mockResolvedValue(undefined),
+      hasEntry: vi.fn().mockReturnValue(false),
+      getEntry: vi.fn().mockReturnValue(undefined),
+    } satisfies SemanticSearchManager);
+  });
+
+  afterEach(() => {
+    if (savedInstanceId === undefined) {
+      delete process.env.WOPR_INSTANCE_ID;
+    } else {
+      process.env.WOPR_INSTANCE_ID = savedInstanceId;
+    }
   });
 
   afterEach(() => {
@@ -102,9 +124,9 @@ describe("initialize failure paths", () => {
   });
 
   it("logs error when storage.register throws", async () => {
-    api.storage.register.mockRejectedValue(new Error("DB locked"));
+    vi.mocked(api.storage.register).mockRejectedValue(new Error("DB locked"));
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     expect(api.log.error).toHaveBeenCalledWith(
       expect.stringContaining("DB locked"),
@@ -113,9 +135,9 @@ describe("initialize failure paths", () => {
   });
 
   it("logs error when FTS5 virtual table creation fails", async () => {
-    api.storage.raw.mockRejectedValueOnce(new Error("FTS5 not available"));
+    vi.mocked(api.storage.raw).mockRejectedValueOnce(new Error("FTS5 not available"));
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     expect(api.log.error).toHaveBeenCalledWith(
       expect.stringContaining("FTS5 not available"),
@@ -124,11 +146,11 @@ describe("initialize failure paths", () => {
   });
 
   it("logs error when MemoryIndexManager.create throws", async () => {
-    (MemoryIndexManager.create as any).mockRejectedValue(
+    vi.mocked(MemoryIndexManager.create).mockRejectedValue(
       new Error("corrupt index file"),
     );
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     expect(api.log.error).toHaveBeenCalledWith(
       expect.stringContaining("corrupt index file"),
@@ -138,11 +160,11 @@ describe("initialize failure paths", () => {
   });
 
   it("logs error when createEmbeddingProvider throws", async () => {
-    (createEmbeddingProvider as any).mockRejectedValue(
+    vi.mocked(createEmbeddingProvider).mockRejectedValue(
       new Error("No API key found for OpenAI"),
     );
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     expect(api.log.error).toHaveBeenCalledWith(
       expect.stringContaining("No API key found"),
@@ -152,11 +174,11 @@ describe("initialize failure paths", () => {
   });
 
   it("logs error when createSemanticSearchManager throws", async () => {
-    (createSemanticSearchManager as any).mockRejectedValue(
+    vi.mocked(createSemanticSearchManager).mockRejectedValue(
       new Error("dimension mismatch: expected 1536, got 384"),
     );
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     expect(api.log.error).toHaveBeenCalledWith(
       expect.stringContaining("dimension mismatch"),
@@ -168,7 +190,7 @@ describe("initialize failure paths", () => {
   it("skips initialization when already initialized", async () => {
     state.initialized = true;
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     // Should return immediately — no storage calls
     expect(api.storage.register).not.toHaveBeenCalled();
@@ -176,9 +198,9 @@ describe("initialize failure paths", () => {
 
   it("skips initialization when init is already in progress", async () => {
     // Call initialize without awaiting to set initInProgress=true
-    const first = initialize(api, state, queue as any, log);
+    const first = initialize(api, state, queue, log);
     // Second call should bail immediately
-    const second = initialize(api, state, queue as any, log);
+    const second = initialize(api, state, queue, log);
 
     await first;
     await second;
@@ -188,15 +210,15 @@ describe("initialize failure paths", () => {
   });
 
   it("resets initInProgress flag even after failure", async () => {
-    api.storage.register.mockRejectedValue(new Error("fail"));
+    vi.mocked(api.storage.register).mockRejectedValue(new Error("fail"));
 
-    await initialize(api, state, queue as any, log);
+    await initialize(api, state, queue, log);
 
     // initInProgress should be false again — a fresh state can init
     const freshState = makeState();
-    api.storage.register.mockResolvedValue(undefined);
+    vi.mocked(api.storage.register).mockResolvedValue(undefined);
 
-    await initialize(api, freshState, queue as any, log);
+    await initialize(api, freshState, queue, log);
 
     expect(freshState.initialized).toBe(true);
   });
@@ -204,10 +226,10 @@ describe("initialize failure paths", () => {
   it("warns when no instanceId is configured", async () => {
     delete process.env.WOPR_INSTANCE_ID;
 
-    await initialize(api, state, queue as any, log, {
+    await initialize(api, state, queue, log, {
       provider: "openai",
       model: "test",
-    } as any);
+    } as Partial<Parameters<typeof initialize>[4]>);
 
     expect(api.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("multi-tenant isolation DISABLED"),
