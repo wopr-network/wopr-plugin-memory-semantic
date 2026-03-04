@@ -292,6 +292,8 @@ export function registerMemoryTools(
         } else {
           writeFileSync(filePath, content);
         }
+        // Re-validate after write to catch TOCTOU races (e.g. symlink swaps during creation)
+        assertWithinBase(ROOT_FILES.includes(filename) ? sessionDir : memoryDir, resolve(filePath));
 
         return { content: [{ type: "text", text: `${shouldAppend ? "Appended to" : "Wrote"} ${filename}` }] };
       } catch (err) {
@@ -390,15 +392,9 @@ export function registerMemoryTools(
         const sessionDir = getSessionDir(sessionName);
         const memoryDir = join(sessionDir, "memory");
 
-        // Resolve path against sessionDir, but restrict reads to memoryDir
-        // unless the file is a known ROOT_FILE (SOUL.md, IDENTITY.md, etc.)
-        let filePath = join(sessionDir, relPath);
+        // Resolve path against memoryDir exclusively — no fallback to sessionDir
+        const filePath = join(memoryDir, relPath);
         assertWithinBase(memoryDir, filePath);
-        if (!existsSync(filePath) && ROOT_FILES.includes(relPath)) {
-          const rootPath = join(sessionDir, relPath);
-          assertWithinBase(sessionDir, rootPath);
-          filePath = rootPath;
-        }
         if (!existsSync(filePath))
           return { content: [{ type: "text", text: `File not found: ${relPath}` }], isError: true };
 
