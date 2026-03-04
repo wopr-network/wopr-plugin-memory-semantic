@@ -163,6 +163,11 @@ export function persistNewEntryToDb(
 /**
  * Backfill instanceId on legacy entries (those with NULL instance_id).
  * Returns the number of rows updated.
+ *
+ * **Important:** This only updates SQLite rows. The in-memory HNSW index
+ * still contains stale metadata. Restart the plugin (or delete the
+ * `.hnsw` / `.hnsw.map.json` files) after running this so the index
+ * is rebuilt from the updated database on next search.
  */
 export function backfillLegacyInstanceId(api: PluginContextLike, instanceId: string, log: PersistenceLogger): number {
   if (!instanceId || instanceId.trim() === "") {
