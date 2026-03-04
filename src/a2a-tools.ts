@@ -13,6 +13,9 @@ import { parseTemporalFilter } from "./core-memory/types.js";
 /** Maximum allowed byte length for self_reflect content fields. */
 const SELF_REFLECT_MAX_BYTES = 65_536; // 64 KB
 
+/** Maximum allowed byte length for the self_reflect section header. */
+const SELF_REFLECT_SECTION_MAX_BYTES = 256;
+
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
   constructor() {
@@ -488,6 +491,17 @@ export function registerMemoryTools(
       if (tattoo && Buffer.byteLength(tattoo, "utf-8") > SELF_REFLECT_MAX_BYTES) {
         return {
           content: [{ type: "text", text: `tattoo exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` }],
+          isError: true,
+        };
+      }
+      if (section && Buffer.byteLength(section, "utf-8") > SELF_REFLECT_SECTION_MAX_BYTES) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `section exceeds maximum allowed size of ${SELF_REFLECT_SECTION_MAX_BYTES} bytes`,
+            },
+          ],
           isError: true,
         };
       }

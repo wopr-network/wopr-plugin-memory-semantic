@@ -80,4 +80,39 @@ describe("self_reflect content size limit", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain("Tattoo added");
   });
+
+  it("rejects section header exceeding 256 bytes", async () => {
+    // "x".repeat(257) is 257 ASCII bytes — over the 256-byte section limit
+    const oversizedSection = "x".repeat(257);
+    const result = await ctx.tools.self_reflect.handler(
+      { reflection: "ok", section: oversizedSection },
+      { sessionName: "default" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("section exceeds maximum allowed size");
+  });
+
+  it("rejects multi-byte reflection exceeding 64 KB by byte count", async () => {
+    // Each '🤔' emoji is 4 bytes. 16_385 * 4 = 65_540 > 65_536
+    const oversized = "🤔".repeat(16_385);
+    expect(Buffer.byteLength(oversized, "utf-8")).toBeGreaterThan(65_536);
+    const result = await ctx.tools.self_reflect.handler(
+      { reflection: oversized },
+      { sessionName: "default" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("exceeds maximum allowed size");
+  });
+
+  it("accepts multi-byte reflection just within 64 KB by byte count", async () => {
+    // Each '🤔' emoji is 4 bytes. 16_384 * 4 = 65_536 — exactly at limit
+    const ok = "🤔".repeat(16_384);
+    expect(Buffer.byteLength(ok, "utf-8")).toBe(65_536);
+    const result = await ctx.tools.self_reflect.handler(
+      { reflection: ok },
+      { sessionName: "default" },
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("Reflection added");
+  });
 });
