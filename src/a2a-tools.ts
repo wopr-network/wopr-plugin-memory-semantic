@@ -5,10 +5,12 @@
  */
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
+import type { SemanticMemoryConfig } from "./types.js";
 
 /** Maximum allowed byte length for self_reflect content fields. */
 const SELF_REFLECT_MAX_BYTES = 65_536; // 64 KB
@@ -150,6 +152,7 @@ export function registerMemoryTools(
   ctx: WOPRPluginContext,
   memoryManager: MemoryIndexManager,
   instanceId?: string,
+  config?: Pick<SemanticMemoryConfig, "maxWriteBytes">,
 ): void {
   // A2A tools require registerTool method (not yet in @wopr-network/plugin-types v0.2.0)
   if (!("registerTool" in ctx)) {
@@ -310,8 +313,9 @@ export function registerMemoryTools(
       try {
         const { file, content, append } = args;
 
-        // Enforce content size limit to prevent disk exhaustion
-        const configuredMax = context.config?.maxWriteBytes ?? MEMORY_WRITE_MAX_BYTES;
+        // Enforce content size limit to prevent disk exhaustion.
+        // Read from plugin config captured in closure; fall back to constant.
+        const configuredMax = config?.maxWriteBytes ?? MEMORY_WRITE_MAX_BYTES;
         if (typeof configuredMax !== "number" || !Number.isFinite(configuredMax) || configuredMax <= 0) {
           return {
             content: [{ type: "text", text: "maxWriteBytes must be a positive finite number" }],
@@ -356,7 +360,7 @@ export function registerMemoryTools(
         const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
         if (shouldAppend && existsSync(filePath)) {
-          const existingBytes = lstatSync(filePath).size;
+          const existingBytes = (await lstat(filePath)).size;
           const combinedBytes = existingBytes + MEMORY_APPEND_SEPARATOR_BYTES + contentBytes;
           if (combinedBytes > maxBytes) {
             return {

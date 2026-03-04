@@ -152,7 +152,7 @@ export async function initialize(
     api.log.info("[semantic-memory] Initial memory sync complete");
 
     // 8. Register A2A memory tools
-    registerMemoryTools(api, state.memoryManager, state.instanceId);
+    registerMemoryTools(api, state.memoryManager, state.instanceId, state.config);
 
     // Create embedding provider
     state.embeddingProvider = await createEmbeddingProvider(state.config);

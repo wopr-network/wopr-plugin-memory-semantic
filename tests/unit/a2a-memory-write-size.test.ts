@@ -22,8 +22,12 @@ function createMockManager() {
 describe("memory_write content size limit", () => {
   let tmpBase: string;
   let ctx: ReturnType<typeof createMockCtx>;
+  let originalWoprHome: string | undefined;
+  let originalWoprGlobalIdentity: string | undefined;
 
   beforeEach(() => {
+    originalWoprHome = process.env.WOPR_HOME;
+    originalWoprGlobalIdentity = process.env.WOPR_GLOBAL_IDENTITY;
     tmpBase = join(tmpdir(), `wopr-test-write-size-${Date.now()}`);
     const memoryDir = join(tmpBase, "sessions", "default", "memory");
     mkdirSync(memoryDir, { recursive: true });
@@ -37,8 +41,16 @@ describe("memory_write content size limit", () => {
 
   afterEach(() => {
     rmSync(tmpBase, { recursive: true, force: true });
-    delete process.env.WOPR_HOME;
-    delete process.env.WOPR_GLOBAL_IDENTITY;
+    if (originalWoprHome === undefined) {
+      delete process.env.WOPR_HOME;
+    } else {
+      process.env.WOPR_HOME = originalWoprHome;
+    }
+    if (originalWoprGlobalIdentity === undefined) {
+      delete process.env.WOPR_GLOBAL_IDENTITY;
+    } else {
+      process.env.WOPR_GLOBAL_IDENTITY = originalWoprGlobalIdentity;
+    }
   });
 
   it("rejects content exceeding 1 MB", async () => {
@@ -118,10 +130,12 @@ describe("memory_write content size limit", () => {
 
   it("uses config.maxWriteBytes when set, rejecting content exceeding it", async () => {
     const customMax = 512;
+    const ctxCustom = createMockCtx();
+    registerMemoryTools(ctxCustom as any, createMockManager(), undefined, { maxWriteBytes: customMax });
     const oversized = "x".repeat(513);
-    const result = await ctx.tools.memory_write.handler(
+    const result = await ctxCustom.tools.memory_write.handler(
       { file: "test.md", content: oversized },
-      { sessionName: "default", config: { maxWriteBytes: customMax } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("exceeds maximum");
@@ -130,10 +144,12 @@ describe("memory_write content size limit", () => {
 
   it("uses config.maxWriteBytes when set, accepting content within it", async () => {
     const customMax = 512;
+    const ctxCustom = createMockCtx();
+    registerMemoryTools(ctxCustom as any, createMockManager(), undefined, { maxWriteBytes: customMax });
     const ok = "x".repeat(512);
-    const result = await ctx.tools.memory_write.handler(
+    const result = await ctxCustom.tools.memory_write.handler(
       { file: "test.md", content: ok },
-      { sessionName: "default", config: { maxWriteBytes: customMax } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain("Wrote");
@@ -141,58 +157,72 @@ describe("memory_write content size limit", () => {
 
   it("config.maxWriteBytes overrides default for append path", async () => {
     const customMax = 1000;
+    const ctxCustom = createMockCtx();
+    registerMemoryTools(ctxCustom as any, createMockManager(), undefined, { maxWriteBytes: customMax });
     const memoryDir = join(tmpBase, "sessions", "default", "memory");
     writeFileSync(join(memoryDir, "capped.md"), "x".repeat(800));
 
     const appendContent = "z".repeat(300); // 800 + 2 + 300 = 1102 > 1000
-    const result = await ctx.tools.memory_write.handler(
+    const result = await ctxCustom.tools.memory_write.handler(
       { file: "capped.md", content: appendContent, append: true },
-      { sessionName: "default", config: { maxWriteBytes: customMax } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("exceeds maximum");
   });
 
   it("rejects maxWriteBytes of 0", async () => {
-    const result = await ctx.tools.memory_write.handler(
+    const ctxInvalid = createMockCtx();
+    registerMemoryTools(ctxInvalid as any, createMockManager(), undefined, { maxWriteBytes: 0 });
+    const result = await ctxInvalid.tools.memory_write.handler(
       { file: "test.md", content: "hello" },
-      { sessionName: "default", config: { maxWriteBytes: 0 } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
   });
 
   it("rejects negative maxWriteBytes", async () => {
-    const result = await ctx.tools.memory_write.handler(
+    const ctxInvalid = createMockCtx();
+    registerMemoryTools(ctxInvalid as any, createMockManager(), undefined, { maxWriteBytes: -1 });
+    const result = await ctxInvalid.tools.memory_write.handler(
       { file: "test.md", content: "hello" },
-      { sessionName: "default", config: { maxWriteBytes: -1 } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
   });
 
   it("rejects Infinity as maxWriteBytes", async () => {
-    const result = await ctx.tools.memory_write.handler(
+    const ctxInvalid = createMockCtx();
+    registerMemoryTools(ctxInvalid as any, createMockManager(), undefined, { maxWriteBytes: Infinity });
+    const result = await ctxInvalid.tools.memory_write.handler(
       { file: "test.md", content: "hello" },
-      { sessionName: "default", config: { maxWriteBytes: Infinity } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
   });
 
   it("rejects NaN as maxWriteBytes", async () => {
-    const result = await ctx.tools.memory_write.handler(
+    const ctxInvalid = createMockCtx();
+    registerMemoryTools(ctxInvalid as any, createMockManager(), undefined, { maxWriteBytes: NaN });
+    const result = await ctxInvalid.tools.memory_write.handler(
       { file: "test.md", content: "hello" },
-      { sessionName: "default", config: { maxWriteBytes: NaN } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
   });
 
   it("rejects string maxWriteBytes", async () => {
-    const result = await ctx.tools.memory_write.handler(
+    const ctxInvalid = createMockCtx();
+    registerMemoryTools(ctxInvalid as any, createMockManager(), undefined, {
+      maxWriteBytes: "1048576" as any,
+    });
+    const result = await ctxInvalid.tools.memory_write.handler(
       { file: "test.md", content: "hello" },
-      { sessionName: "default", config: { maxWriteBytes: "1048576" as any } },
+      { sessionName: "default" },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
