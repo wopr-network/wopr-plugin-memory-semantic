@@ -61,6 +61,55 @@ const state: PluginState = {
 const embeddingQueue = new EmbeddingQueue({ info: console.info, error: console.error });
 
 // =============================================================================
+// Config mapping
+// =============================================================================
+
+/**
+ * Translate flat wizard-config keys to the nested SemanticMemoryConfig shape
+ * that initialize() and the runtime expect.
+ *
+ * The pluginConfigSchema exposes flat fields (autoRecallEnabled,
+ * autoCaptureEnabled, searchMaxResults, searchHybridWeight) because config
+ * UIs can only render flat key/value pairs. This function converts those to
+ * the nested sub-objects that the runtime reads.
+ */
+export function mapFlatConfigToNested(raw: Record<string, unknown>): Partial<SemanticMemoryConfig> {
+  const config: Partial<SemanticMemoryConfig> = {};
+
+  // Pass-through flat keys that are already flat in SemanticMemoryConfig
+  if (raw.provider !== undefined) config.provider = raw.provider as SemanticMemoryConfig["provider"];
+  if (raw.apiKey !== undefined) config.apiKey = raw.apiKey as string;
+  if (raw.model !== undefined) config.model = raw.model as string;
+  if (raw.baseUrl !== undefined) config.baseUrl = raw.baseUrl as string;
+  if (raw.maxWriteBytes !== undefined) config.maxWriteBytes = raw.maxWriteBytes as number;
+  if (raw.instanceId !== undefined) config.instanceId = raw.instanceId as string;
+
+  // Map flat wizard keys → nested sub-objects
+  if (raw.autoRecallEnabled !== undefined) {
+    config.autoRecall = { enabled: raw.autoRecallEnabled as boolean } as SemanticMemoryConfig["autoRecall"];
+  }
+  if (raw.autoCaptureEnabled !== undefined) {
+    config.autoCapture = { enabled: raw.autoCaptureEnabled as boolean } as SemanticMemoryConfig["autoCapture"];
+  }
+  if (raw.searchMaxResults !== undefined) {
+    config.search = { maxResults: Math.round(raw.searchMaxResults as number) } as SemanticMemoryConfig["search"];
+  }
+  if (raw.searchHybridWeight !== undefined) {
+    const vectorWeight = Math.max(0, Math.min(1, raw.searchHybridWeight as number));
+    config.hybrid = { vectorWeight, textWeight: 1 - vectorWeight } as SemanticMemoryConfig["hybrid"];
+  }
+
+  // Pass through any already-nested keys (e.g. programmatic callers using the full shape)
+  for (const key of ["search", "hybrid", "autoRecall", "autoCapture", "store", "cache", "chunking", "sync"] as const) {
+    if (raw[key] !== undefined && config[key] === undefined) {
+      (config as Record<string, unknown>)[key] = raw[key];
+    }
+  }
+
+  return config;
+}
+
+// =============================================================================
 // Plugin Export
 // =============================================================================
 
@@ -134,8 +183,11 @@ const plugin: WOPRPlugin & {
     ctx.registerContextProvider(memoryContextProvider);
     cleanups.push(() => ctx?.unregisterContextProvider("memory-semantic"));
 
-    // Read config from WOPR central config (set by onboard wizard)
-    const storedConfig = ctx.getConfig?.() as Partial<SemanticMemoryConfig> | undefined;
+    // Read config from WOPR central config (set by onboard wizard).
+    // The wizard stores flat keys (e.g. autoRecallEnabled) but initialize()
+    // expects nested SemanticMemoryConfig — map them before passing.
+    const rawConfig = ctx.getConfig?.() as Record<string, unknown> | undefined;
+    const storedConfig = rawConfig ? mapFlatConfigToNested(rawConfig) : undefined;
     await initialize(ctx, state, embeddingQueue, log, storedConfig);
 
     // Capture any cleanup functions registered during initialize() (e.g. unsubSessionDestroy)
