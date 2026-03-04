@@ -86,4 +86,8 @@ describe("WebMCP tool unregistration in shutdown()", () => {
     await plugin.shutdown();
     expect(mockUnregisterWebMCP).not.toHaveBeenCalled();
   });
+
+  it("should not throw when shutdown() is called without prior init()", async () => {
+    await expect(plugin.shutdown()).resolves.not.toThrow();
+  });
 });

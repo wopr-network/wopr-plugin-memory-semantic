@@ -185,9 +185,10 @@ const plugin: WOPRPlugin & {
 
     // Register WebMCP browser-side tools if the platform exposes a registry
     if (ctx.webmcpRegistry) {
-      registerWebMCPTools(ctx.webmcpRegistry, "/api", state.instanceId);
+      const registry = ctx.webmcpRegistry;
+      registerWebMCPTools(registry, "/api", state.instanceId);
       cleanups.push(() => {
-        if (ctx?.webmcpRegistry) unregisterWebMCPTools(ctx.webmcpRegistry!);
+        unregisterWebMCPTools(registry);
       });
       log.info("[semantic-memory] Registered WebMCP browser tools");
     }
