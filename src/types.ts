@@ -56,6 +56,8 @@ export interface SemanticMemoryConfig {
 
   // Storage
   store: {
+    /** @deprecated unused; storage is derived from api.storage/WOPR_HOME */
+    path?: string;
     vectorEnabled: boolean;
   };
 
