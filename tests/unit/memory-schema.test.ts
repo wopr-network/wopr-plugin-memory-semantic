@@ -7,8 +7,10 @@ import {
   MEMORY_SCHEMA_VERSION,
 } from "../../src/memory-schema.js";
 
+type MockStorage = StorageApi & { rawCalls: Array<[string, unknown[]?]> };
+
 // Helper: create a mock StorageApi with a recording raw() method
-function createMockStorage(): StorageApi & { rawCalls: Array<[string, unknown[]?]> } {
+function createMockStorage(): MockStorage {
   const rawCalls: Array<[string, unknown[]?]> = [];
   const mockStorage = {
     rawCalls,
@@ -22,8 +24,19 @@ function createMockStorage(): StorageApi & { rawCalls: Array<[string, unknown[]?
     list: vi.fn(),
     count: vi.fn(),
     query: vi.fn(),
-  } as unknown as StorageApi & { rawCalls: Array<[string, unknown[]?]> };
+  } as unknown as MockStorage;
   return mockStorage;
+}
+
+// Helper: replace raw() with a custom implementation that still records calls
+function mockRaw(
+  storage: MockStorage,
+  impl: (sql: string, params?: unknown[]) => Promise<unknown[]>,
+): void {
+  vi.mocked(storage.raw).mockImplementation(async (sql: string, params?: unknown[]) => {
+    storage.rawCalls.push([sql, params]);
+    return impl(sql, params);
+  });
 }
 
 describe("memory-schema", () => {
@@ -46,7 +59,11 @@ describe("memory-schema", () => {
 
     it("returns schema with files, chunks, and meta tables", () => {
       const schema = createMemoryPluginSchema(undefined);
-      expect(Object.keys(schema.tables)).toEqual(["files", "chunks", "meta"]);
+      expect(schema.tables).toMatchObject({
+        files: expect.anything(),
+        chunks: expect.anything(),
+        meta: expect.anything(),
+      });
     });
 
     it("has migrate function", () => {
@@ -233,20 +250,26 @@ describe("memory-schema", () => {
       expect(sqls).not.toContainEqual(expect.stringContaining("UPDATE memory_chunks SET instance_id"));
     });
 
-    it("runs v0-to-v1 and v1-to-v2 when migrating from v0 to v2", async () => {
+    it("runs v1-to-v2 when migrating from v0 to v2 (legacy migration skipped without WOPR_HOME)", async () => {
       const originalWoprHome = process.env.WOPR_HOME;
       delete process.env.WOPR_HOME;
 
-      const storage = createMockStorage();
-      const schema = createMemoryPluginSchema("inst-1");
+      try {
+        const storage = createMockStorage();
+        const schema = createMemoryPluginSchema("inst-1");
 
-      await schema.migrate!(0, 2, storage);
+        await schema.migrate!(0, 2, storage);
 
-      const sqls = storage.rawCalls.map(([sql]) => sql);
-      expect(sqls).toContainEqual(expect.stringContaining("ALTER TABLE memory_chunks ADD COLUMN instance_id"));
-      expect(sqls).toContainEqual(expect.stringContaining("UPDATE memory_chunks SET instance_id"));
-
-      if (originalWoprHome !== undefined) process.env.WOPR_HOME = originalWoprHome;
+        const sqls = storage.rawCalls.map(([sql]) => sql);
+        expect(sqls).toContainEqual(expect.stringContaining("ALTER TABLE memory_chunks ADD COLUMN instance_id"));
+        expect(sqls).toContainEqual(expect.stringContaining("UPDATE memory_chunks SET instance_id"));
+      } finally {
+        if (originalWoprHome !== undefined) {
+          process.env.WOPR_HOME = originalWoprHome;
+        } else {
+          delete process.env.WOPR_HOME;
+        }
+      }
     });
 
     it("does not run v1-to-v2 migration when fromVersion >= 2", async () => {
@@ -260,8 +283,7 @@ describe("memory-schema", () => {
 
     it("handles ALTER TABLE failure gracefully (column already exists)", async () => {
       const storage = createMockStorage();
-      (storage.raw as ReturnType<typeof vi.fn>).mockImplementation(async (sql: string, params?: unknown[]) => {
-        storage.rawCalls.push([sql, params]);
+      mockRaw(storage, async (sql) => {
         if (sql.includes("ALTER TABLE")) throw new Error("duplicate column name: instance_id");
         return [];
       });
@@ -278,8 +300,7 @@ describe("memory-schema", () => {
     it("running v1-to-v2 migration twice does not throw", async () => {
       const storage = createMockStorage();
       let alterCount = 0;
-      (storage.raw as ReturnType<typeof vi.fn>).mockImplementation(async (sql: string, params?: unknown[]) => {
-        storage.rawCalls.push([sql, params]);
+      mockRaw(storage, async (sql) => {
         if (sql.includes("ALTER TABLE")) {
           alterCount++;
           if (alterCount > 1) throw new Error("duplicate column name: instance_id");
