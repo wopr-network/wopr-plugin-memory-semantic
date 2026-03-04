@@ -283,6 +283,20 @@ export function registerMemoryTools(
 
         const filePath = ROOT_FILES.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
         assertWithinBase(ROOT_FILES.includes(filename) ? sessionDir : memoryDir, filePath);
+
+        // Guard: reject symlinks at write target (closes TOCTOU window after assertWithinBase).
+        // Use lstatSync (not existsSync) so dangling symlinks are also caught — existsSync
+        // follows the link and returns false for dangling targets, allowing a bypass.
+        try {
+          const stat = lstatSync(filePath);
+          if (stat.isSymbolicLink()) {
+            throw new PathTraversalError();
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+          // ENOENT means the path doesn't exist yet — fine, we're creating it
+        }
+
         const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
         if (shouldAppend && existsSync(filePath)) {
