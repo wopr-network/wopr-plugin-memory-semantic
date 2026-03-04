@@ -253,4 +253,89 @@ describe("cross-tenant isolation", () => {
 
     await sm.close();
   });
+
+  it("excludeLegacyEntries filters legacy entries from hybrid/FTS search path", async () => {
+    const provider = createMockEmbeddingProvider();
+    const excludeConfig: SemanticMemoryConfig = {
+      ...DEFAULT_CONFIG,
+      search: { ...DEFAULT_CONFIG.search, maxResults: 10, minScore: 0.0, candidateMultiplier: 4, excludeLegacyEntries: true },
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    };
+
+    // Legacy entry (no instanceId)
+    const legacyEntry = {
+      id: "legacy-hybrid",
+      path: "global/MEMORY.md",
+      startLine: 0,
+      endLine: 0,
+      source: "global",
+      snippet: "legacy hybrid memory",
+      content: "legacy hybrid memory from before tenant isolation",
+    };
+
+    // Scoped entry
+    const scopedEntry = {
+      id: "scoped-hybrid",
+      path: "session:default",
+      startLine: 0,
+      endLine: 0,
+      source: "realtime-user",
+      snippet: "scoped hybrid memory",
+      content: "scoped hybrid memory for instance-a only",
+      instanceId: "instance-a",
+    };
+
+    // Mock keyword search that returns both legacy and scoped entries
+    const keywordSearchFn = async (_query: string, _limit: number, _instanceId?: string) => [
+      { ...legacyEntry, textScore: 0.8 },
+      { ...scopedEntry, textScore: 0.7 },
+    ];
+
+    const sm = await createSemanticSearchManager(excludeConfig, provider, keywordSearchFn);
+
+    await sm.addEntry(legacyEntry, legacyEntry.content);
+    await sm.addEntry(scopedEntry, scopedEntry.content);
+
+    // Tenant-scoped query with excludeLegacyEntries=true should NOT see legacy entries
+    const results = await sm.search("hybrid memory", 10, "instance-a");
+    const hasLegacy = results.some((r) => r.snippet?.includes("legacy hybrid"));
+    const hasScoped = results.some((r) => r.snippet?.includes("scoped hybrid"));
+    expect(hasLegacy).toBe(false);
+    expect(hasScoped).toBe(true);
+
+    await sm.close();
+  });
+
+  it("hybrid search without excludeLegacyEntries still shows legacy entries", async () => {
+    const provider = createMockEmbeddingProvider();
+    const includeConfig: SemanticMemoryConfig = {
+      ...DEFAULT_CONFIG,
+      search: { ...DEFAULT_CONFIG.search, maxResults: 10, minScore: 0.0, candidateMultiplier: 4, excludeLegacyEntries: false },
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    };
+
+    const legacyEntry = {
+      id: "legacy-include",
+      path: "global/MEMORY.md",
+      startLine: 0,
+      endLine: 0,
+      source: "global",
+      snippet: "legacy include memory",
+      content: "legacy include memory from before tenant isolation",
+    };
+
+    const keywordSearchFn = async (_query: string, _limit: number, _instanceId?: string) => [
+      { ...legacyEntry, textScore: 0.8 },
+    ];
+
+    const sm = await createSemanticSearchManager(includeConfig, provider, keywordSearchFn);
+    await sm.addEntry(legacyEntry, legacyEntry.content);
+
+    // Tenant-scoped query with excludeLegacyEntries=false should still see legacy entries
+    const results = await sm.search("legacy include memory", 10, "instance-a");
+    const hasLegacy = results.some((r) => r.snippet?.includes("legacy include"));
+    expect(hasLegacy).toBe(true);
+
+    await sm.close();
+  });
 });

@@ -543,7 +543,16 @@ export async function createSemanticSearchManager(
         textWeight: config.hybrid.textWeight,
       });
 
-      return merged.filter((r) => r.score >= config.search.minScore).slice(0, limit);
+      return merged
+        .filter((r) => {
+          if (r.score < config.search.minScore) return false;
+          // TENANT ISOLATION: exclude legacy entries (no instanceId) from hybrid/FTS results
+          // when the caller is tenant-scoped and excludeLegacyEntries is enabled.
+          if (instanceId && r.instanceId == null && config.search.excludeLegacyEntries) return false;
+          if (instanceId && r.instanceId != null && r.instanceId !== instanceId) return false;
+          return true;
+        })
+        .slice(0, limit);
     },
 
     async addEntry(entry: Omit<VectorEntry, "embedding">, text: string): Promise<void> {
