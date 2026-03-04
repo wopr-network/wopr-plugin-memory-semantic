@@ -183,13 +183,13 @@ const plugin: WOPRPlugin & {
       cleanups.push(() => ctx?.unregisterExtension?.("memory-semantic"));
     }
 
-    // Register WebMCP browser-side tools if the platform exposes a registry
-    if (ctx.webmcpRegistry) {
-      const registry = ctx.webmcpRegistry;
-      registerWebMCPTools(registry, "/api", state.instanceId);
-      cleanups.push(() => {
-        unregisterWebMCPTools(registry);
-      });
+    // Register WebMCP browser-side tools if the platform exposes a registry.
+    // Capture the registry in a local variable so the cleanup always targets
+    // the correct instance, even if ctx is reassigned on a later re-init.
+    const webmcpRegistry = ctx.webmcpRegistry;
+    if (webmcpRegistry) {
+      registerWebMCPTools(webmcpRegistry, "/api", state.instanceId);
+      cleanups.push(() => unregisterWebMCPTools(webmcpRegistry));
       log.info("[semantic-memory] Registered WebMCP browser tools");
     }
 

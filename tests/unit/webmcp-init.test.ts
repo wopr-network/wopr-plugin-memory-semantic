@@ -87,7 +87,11 @@ describe("WebMCP tool unregistration in shutdown()", () => {
     expect(mockUnregisterWebMCP).not.toHaveBeenCalled();
   });
 
-  it("should not throw when shutdown() is called without prior init()", async () => {
-    await expect(plugin.shutdown()).resolves.not.toThrow();
+  it("should not call unregisterMemoryTools when shutdown is called without init", async () => {
+    // Drain any state from previous tests, then verify a bare shutdown is safe
+    await plugin.shutdown();
+    vi.clearAllMocks();
+    await expect(plugin.shutdown()).resolves.toBeUndefined();
+    expect(mockUnregisterWebMCP).not.toHaveBeenCalled();
   });
 });
