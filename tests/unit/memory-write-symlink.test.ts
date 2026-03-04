@@ -103,4 +103,38 @@ describe("memory_write symlink guard (TOCTOU)", () => {
     expect(existsSync(writtenPath)).toBe(true);
     expect(readFileSync(writtenPath, "utf-8")).toBe("hello");
   });
+
+  it("should reject a dangling symlink (target does not exist outside sandbox)", async () => {
+    // dangling: the symlink target doesn't exist at all
+    const danglingTarget = join(outsideDir, "nonexistent.txt");
+    const symlinkPath = join(memoryDir, "dangling.md");
+    symlinkSync(danglingTarget, symlinkPath);
+
+    const memoryWrite = ctx.tools["memory_write"];
+    const result = await memoryWrite.handler(
+      { file: "dangling.md", content: "INJECTED" },
+      { sessionName: "default" },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text.toLowerCase()).toContain("path");
+    // The dangling target must not have been created
+    expect(existsSync(danglingTarget)).toBe(false);
+  });
+
+  it("should reject symlink in ROOT_FILES branch (e.g. MEMORY.md at session root)", async () => {
+    // Place symlink at session root for a ROOT_FILES entry
+    const symlinkPath = join(sessionDir, "MEMORY.md");
+    symlinkSync(outsideFile, symlinkPath);
+
+    const memoryWrite = ctx.tools["memory_write"];
+    const result = await memoryWrite.handler(
+      { file: "MEMORY.md", content: "OVERWRITTEN" },
+      { sessionName: "default" },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text.toLowerCase()).toContain("path");
+    expect(readFileSync(outsideFile, "utf-8")).toBe("ORIGINAL_SECRET");
+  });
 });
