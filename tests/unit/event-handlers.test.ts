@@ -286,6 +286,41 @@ describe("handleMemorySearch", () => {
     }
   });
 
+  it("truncates long queries in debug log to limit PII exposure", async () => {
+    const state = makeSearchState({ initialized: false });
+    const log = makeLog();
+    const longQuery = "a".repeat(80);
+    const payload = { query: longQuery, maxResults: 5, minScore: 0.5, sessionName: "s", results: null };
+    await handleMemorySearch(state as any, log, payload);
+    expect(log.debug).toHaveBeenCalledTimes(1);
+    const debugMsg: string = log.debug.mock.calls[0][0];
+    // Should contain truncated preview (60 chars + ellipsis), not the full query
+    expect(debugMsg).toContain("a".repeat(60) + "…");
+    expect(debugMsg).not.toContain("a".repeat(61));
+    // Should include the full query length for diagnostics
+    expect(debugMsg).toContain(`length=${longQuery.length}`);
+  });
+
+  it("does not truncate short queries in debug log", async () => {
+    const state = makeSearchState({ initialized: false });
+    const log = makeLog();
+    const shortQuery = "find relevant docs";
+    const payload = { query: shortQuery, maxResults: 5, minScore: 0.5, sessionName: "s", results: null };
+    await handleMemorySearch(state as any, log, payload);
+    expect(log.debug).toHaveBeenCalledTimes(1);
+    const debugMsg: string = log.debug.mock.calls[0][0];
+    expect(debugMsg).toContain(shortQuery);
+    expect(debugMsg).not.toContain("…");
+  });
+
+  it("works when log has no debug method (optional interface)", async () => {
+    const state = makeSearchState({ initialized: false });
+    const log = { info: vi.fn(), error: vi.fn() }; // no debug
+    const payload = { query: "test", maxResults: 5, minScore: 0.5, sessionName: "s", results: null };
+    // Should not throw even without a debug method
+    await expect(handleMemorySearch(state as any, log, payload)).resolves.toBeUndefined();
+  });
+
   it("returns early when state.initialized is false", async () => {
     const state = makeSearchState({ initialized: false });
     const log = makeLog();
