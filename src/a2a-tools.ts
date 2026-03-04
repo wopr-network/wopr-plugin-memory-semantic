@@ -152,7 +152,7 @@ export function registerMemoryTools(
   instanceId?: string,
 ): void {
   // A2A tools require registerTool method (not yet in @wopr-network/plugin-types v0.2.0)
-  if (!("registerTool" in ctx)) {
+  if (typeof (ctx as any).registerTool !== "function") {
     ctx.log.warn(
       "[memory-semantic] ctx.registerTool not available — A2A memory tools will not be registered. " +
         "Upgrade @wopr-network/plugin-types or ensure the host provides registerTool.",
