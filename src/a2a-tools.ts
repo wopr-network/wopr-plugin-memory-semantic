@@ -10,6 +10,9 @@ import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
 
+/** Maximum allowed byte length for self_reflect content fields. */
+const SELF_REFLECT_MAX_BYTES = 65_536; // 64 KB
+
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
   constructor() {
@@ -471,6 +474,22 @@ export function registerMemoryTools(
       const { reflection, tattoo, section } = args;
       if (!reflection && !tattoo) {
         return { content: [{ type: "text", text: "Provide 'reflection' or 'tattoo'" }], isError: true };
+      }
+
+      // Enforce content size limit to prevent disk exhaustion
+      if (reflection && Buffer.byteLength(reflection, "utf-8") > SELF_REFLECT_MAX_BYTES) {
+        return {
+          content: [
+            { type: "text", text: `reflection exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` },
+          ],
+          isError: true,
+        };
+      }
+      if (tattoo && Buffer.byteLength(tattoo, "utf-8") > SELF_REFLECT_MAX_BYTES) {
+        return {
+          content: [{ type: "text", text: `tattoo exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` }],
+          isError: true,
+        };
       }
 
       const sessionName = context.sessionName || "default";
