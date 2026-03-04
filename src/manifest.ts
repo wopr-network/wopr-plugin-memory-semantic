@@ -51,6 +51,21 @@ export const pluginManifest: PluginManifest = {
         id: "semantic-memory",
         displayName: "Semantic Memory (Embeddings)",
       },
+      {
+        type: "semantic-search",
+        id: "semantic-search",
+        displayName: "Semantic Search",
+      },
+      {
+        type: "auto-recall",
+        id: "auto-recall",
+        displayName: "Auto-Recall",
+      },
+      {
+        type: "auto-capture",
+        id: "auto-capture",
+        displayName: "Auto-Capture",
+      },
     ],
   },
   requires: {},
