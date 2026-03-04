@@ -560,7 +560,7 @@ describe("daemonRequest timeout", () => {
     await tool.handler({ query: "test" }, {});
 
     const fetchOptions = mockFetch.mock.calls[0][1];
-    expect(fetchOptions.signal).toBeDefined();
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
   });
 });
 
