@@ -10,6 +10,12 @@ import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
 
+/** Duck-type interface for plugin contexts that expose tool registration. */
+interface ContextWithTools extends WOPRPluginContext {
+  registerTool?: unknown;
+  unregisterTool?: unknown;
+}
+
 /** Maximum allowed byte length for self_reflect content fields. */
 const SELF_REFLECT_MAX_BYTES = 65_536; // 64 KB
 
@@ -152,7 +158,7 @@ export function registerMemoryTools(
   instanceId?: string,
 ): void {
   // A2A tools require registerTool method (not yet in @wopr-network/plugin-types v0.2.0)
-  if (typeof (ctx as { registerTool?: unknown }).registerTool !== "function") {
+  if (typeof (ctx as ContextWithTools).registerTool !== "function") {
     ctx.log.warn(
       "[memory-semantic] ctx.registerTool not available — A2A memory tools will not be registered. " +
         "Upgrade @wopr-network/plugin-types or ensure the host provides registerTool.",
@@ -176,7 +182,7 @@ export function registerMemoryTools(
   const ROOT_FILES = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
 
   // Type assertion after guard check
-  const api = ctx as typeof ctx & { registerTool: (tool: any) => void };
+  const api = ctx as ContextWithTools & { registerTool: (...args: unknown[]) => unknown };
 
   // memory_read tool
   api.registerTool({
@@ -632,11 +638,11 @@ const TOOL_NAMES = ["memory_read", "memory_write", "memory_search", "memory_get"
  * Requires ctx to have an unregisterTool method.
  */
 export function unregisterMemoryTools(ctx: WOPRPluginContext): void {
-  if (typeof (ctx as { unregisterTool?: unknown }).unregisterTool !== "function") {
+  if (typeof (ctx as ContextWithTools).unregisterTool !== "function") {
     ctx.log.warn("[memory-semantic] ctx.unregisterTool not available — A2A memory tools cannot be unregistered.");
     return;
   }
-  const api = ctx as typeof ctx & { unregisterTool: (name: string) => void };
+  const api = ctx as ContextWithTools & { unregisterTool: (name: string) => void };
   for (const name of TOOL_NAMES) {
     try {
       api.unregisterTool(name);
