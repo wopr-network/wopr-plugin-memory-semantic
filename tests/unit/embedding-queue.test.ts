@@ -354,5 +354,39 @@ describe("EmbeddingQueue", () => {
       queue.clear();
       expect(queue.bootstrapping).toBe(false);
     });
+
+    it("should not crash when clear() is called while drain() is mid-await", async () => {
+      const log = makeLogger();
+      const queue = new EmbeddingQueue(log);
+      const sm = makeSearchManager();
+
+      // Make addEntriesBatch hang until we resolve it
+      let resolveAdd!: () => void;
+      sm.addEntriesBatch.mockImplementationOnce(
+        () => new Promise<number>((resolve) => {
+          resolveAdd = () => resolve(1);
+        }),
+      );
+
+      queue.attach(sm as any);
+      queue.enqueue([makeEntry("a")], "test");
+
+      // drain() is now awaiting addEntriesBatch
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
+
+      // clear() while drain is mid-await — should not crash
+      const clearPromise = queue.clear();
+
+      // Resolve the hanging addEntriesBatch — drain resumes with null searchManager
+      resolveAdd();
+
+      // Flush everything
+      await clearPromise;
+      await vi.runAllTimersAsync();
+
+      // No crash — verify clear worked
+      expect(log.error.mock.calls.filter((c: string[]) => c[0].includes("crash"))).toHaveLength(0);
+    });
   });
 });
