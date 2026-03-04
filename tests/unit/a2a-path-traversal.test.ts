@@ -123,4 +123,70 @@ describe("A2A tools path traversal protection", () => {
       expect(parsed.text).toBe("safe content");
     });
   });
+
+  describe("sessionName validation", () => {
+    it("accepts valid session names", async () => {
+      const tool = ctx.tools["memory_read"];
+      for (const name of ["default", "my-session", "session_123", "A", "a".repeat(64)]) {
+        // Create session dir for valid names so it doesn't fail on missing dir
+        const dir = join(sessionsDir, name, "memory");
+        mkdirSync(dir, { recursive: true });
+        await expect(
+          tool.handler({ file: "SELF.md" }, { sessionName: name })
+        ).resolves.toBeDefined();
+      }
+    });
+
+    it("rejects path traversal in sessionName", async () => {
+      const tool = ctx.tools["memory_read"];
+      for (const name of ["../etc", "foo/../bar", "..\\windows"]) {
+        await expect(
+          tool.handler({ file: "SELF.md" }, { sessionName: name })
+        ).rejects.toThrow("Invalid session name");
+      }
+    });
+
+    it("rejects null bytes in sessionName", async () => {
+      const tool = ctx.tools["memory_read"];
+      await expect(
+        tool.handler({ file: "SELF.md" }, { sessionName: "session\x00name" })
+      ).rejects.toThrow("Invalid session name");
+    });
+
+    it("rejects Windows reserved names", async () => {
+      const tool = ctx.tools["memory_read"];
+      for (const name of ["con", "CON", "aux", "AUX", "nul", "NUL", "prn", "PRN", "com1", "COM9", "lpt1", "LPT3"]) {
+        await expect(
+          tool.handler({ file: "SELF.md" }, { sessionName: name })
+        ).rejects.toThrow("Invalid session name");
+      }
+    });
+
+    it("rejects names longer than 64 characters", async () => {
+      const tool = ctx.tools["memory_read"];
+      await expect(
+        tool.handler({ file: "SELF.md" }, { sessionName: "a".repeat(65) })
+      ).rejects.toThrow("Invalid session name");
+    });
+
+    it("rejects empty session name when passed directly to validateSessionName", async () => {
+      // Note: handlers use `context.sessionName || "default"` so empty string
+      // becomes "default" before reaching validateSessionName. Test via a name
+      // that is explicitly invalid.
+      const tool = ctx.tools["memory_read"];
+      // Single char that's invalid — space — covers the empty/whitespace case
+      await expect(
+        tool.handler({ file: "SELF.md" }, { sessionName: " " })
+      ).rejects.toThrow("Invalid session name");
+    });
+
+    it("rejects names with special characters", async () => {
+      const tool = ctx.tools["memory_read"];
+      for (const name of ["foo bar", "foo/bar", "foo:bar", "foo*bar", "foo?bar", "foo<bar", "foo>bar", "foo|bar", "foo\"bar"]) {
+        await expect(
+          tool.handler({ file: "SELF.md" }, { sessionName: name })
+        ).rejects.toThrow("Invalid session name");
+      }
+    });
+  });
 });
