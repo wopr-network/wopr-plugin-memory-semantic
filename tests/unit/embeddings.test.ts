@@ -155,6 +155,94 @@ describe("createGeminiEmbeddingProvider", () => {
   });
 });
 
+// =============================================================================
+// Gemini error payload truncation (WOP-1554)
+// =============================================================================
+
+describe("Gemini error payload truncation (WOP-1554)", () => {
+  let restoreEnv: () => void;
+
+  beforeEach(() => {
+    restoreEnv = snapshotEnv(["GOOGLE_API_KEY", "GEMINI_API_KEY"]);
+  });
+
+  afterEach(() => {
+    restoreEnv();
+  });
+
+  it("should truncate long error payloads to 200 chars", async () => {
+    const longPayload = "x".repeat(500);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(longPayload, { status: 400 }),
+    );
+    try {
+      const provider = await createGeminiEmbeddingProvider(
+        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+      );
+      await expect(provider.embedQuery("hello")).rejects.toThrow(
+        /Gemini embeddings failed: 400 x{200}\.\.\.\[truncated\]/,
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("should preserve short error payloads as-is", async () => {
+    const shortPayload = "Bad request";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(shortPayload, { status: 400 }),
+    );
+    try {
+      const provider = await createGeminiEmbeddingProvider(
+        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+      );
+      await expect(provider.embedQuery("hello")).rejects.toThrow(
+        `Gemini embeddings failed: 400 Bad request`,
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("should not leak API keys in truncated error messages", async () => {
+    const apiKey = "AIzaSyDEADBEEF1234567890SECRETKEY";
+    // Place the key after the 200-char mark so truncation removes it
+    const payloadWithKey = "a".repeat(201) + apiKey;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(payloadWithKey, { status: 400 }),
+    );
+    try {
+      const provider = await createGeminiEmbeddingProvider(
+        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+      );
+      await expect(provider.embedQuery("hello")).rejects.toSatisfy((err: Error) => {
+        return !err.message.includes(apiKey);
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("should truncate long batch error payloads", async () => {
+    const longPayload = "y".repeat(500);
+    let callCount = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      callCount++;
+      return new Response(longPayload, { status: 500 });
+    });
+    try {
+      const provider = await createGeminiEmbeddingProvider(
+        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+      );
+      await expect(provider.embedBatch(["hello", "world"])).rejects.toThrow(
+        /Gemini batch embeddings failed: 500 y{200}\.\.\.\[truncated\]/,
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
 describe("createEmbeddingProvider", () => {
   let restoreEnv: () => void;
 
