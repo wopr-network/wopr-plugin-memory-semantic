@@ -16,7 +16,10 @@ export function multiScaleChunk(
   // hasEntry(baseId) works for dedup on restart/bootstrap.
   // Only consider valid scales (finite, positive tokens) to avoid empty/incorrect canonical content.
   const validScales = scales.filter((s) => Number.isFinite(s.tokens) && s.tokens > 0);
-  const smallest = validScales.length > 0 ? validScales.reduce((a, b) => (a.tokens <= b.tokens ? a : b)) : undefined;
+  let smallest: (typeof scales)[0] | undefined;
+  if (validScales.length > 0) {
+    smallest = validScales.reduce((a, b) => (a.tokens <= b.tokens ? a : b));
+  }
   if (smallest && text.trim().length >= 10) {
     const maxChars = smallest.tokens * 4;
     results.push({
