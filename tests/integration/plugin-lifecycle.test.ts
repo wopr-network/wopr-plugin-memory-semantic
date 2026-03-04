@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 
 // Mock the embeddings module so init() can run without a real embedding provider
@@ -142,13 +142,20 @@ describe("plugin lifecycle", () => {
     expect(ctx._handlers.get("memory:filesChanged")?.length ?? 0).toBeLessThan(countsBefore.get("memory:filesChanged")!);
   });
 
-  it("should throw if search is called before init", async () => {
-    // The plugin is shut down from the previous test; search should throw
-    await expect(plugin.search("test query")).rejects.toThrow("not initialized");
-  });
+  describe("when plugin is not initialized", () => {
+    beforeEach(async () => {
+      // Ensure plugin is shut down regardless of prior test state.
+      // shutdown() is idempotent — safe to call even if already shut down.
+      await plugin.shutdown();
+    });
 
-  it("should throw if capture is called before init", async () => {
-    await expect(plugin.capture("some text")).rejects.toThrow("not initialized");
+    it("should throw if search is called before init", async () => {
+      await expect(plugin.search("test query")).rejects.toThrow("not initialized");
+    });
+
+    it("should throw if capture is called before init", async () => {
+      await expect(plugin.capture("some text")).rejects.toThrow("not initialized");
+    });
   });
 
   it("should allow re-initialization after shutdown", async () => {
