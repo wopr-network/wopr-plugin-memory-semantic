@@ -491,8 +491,8 @@ export async function createSemanticSearchManager(
       // TENANT ISOLATION: skip entries that don't belong to this instance.
       // Entries with undefined instanceId are legacy/global — visible to all by default.
       // When excludeLegacyEntries is true, tenant-scoped queries skip legacy entries.
-      if (instanceId && entry.instanceId === undefined && config.search.excludeLegacyEntries) continue;
-      if (instanceId && entry.instanceId !== undefined && entry.instanceId !== instanceId) continue;
+      if (instanceId && entry.instanceId == null && config.search.excludeLegacyEntries) continue;
+      if (instanceId && entry.instanceId != null && entry.instanceId !== instanceId) continue;
 
       scored.push({
         id: entry.id,

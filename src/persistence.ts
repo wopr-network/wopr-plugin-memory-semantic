@@ -165,6 +165,9 @@ export function persistNewEntryToDb(
  * Returns the number of rows updated.
  */
 export function backfillLegacyInstanceId(api: PluginContextLike, instanceId: string, log: PersistenceLogger): number {
+  if (!instanceId || instanceId.trim() === "") {
+    throw new Error("instanceId must be a non-empty string");
+  }
   const db = getDb(api);
   if (!db) {
     log.warn("backfillLegacyInstanceId: no database handle available");
