@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import {
   getDb,
   ensureEmbeddingColumn,
@@ -9,15 +11,43 @@ import {
   persistNewEntryToDb,
 } from "../../src/persistence.js";
 
+// Guard: node:sqlite is only available on Node >= 22.5.0.
+// On older versions the entire suite is skipped rather than aborting the run,
+// mirroring the guarded dynamic import used in production code.
+let DatabaseSync: any;
+try {
+  ({ DatabaseSync } = await import("node:sqlite"));
+} catch {
+  /* node:sqlite unavailable — SQLite-dependent tests will be skipped */
+}
+const hasSqlite = DatabaseSync !== undefined;
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
 function makeLog() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
-function makeDb(opts?: { readOnly?: boolean }) {
-  return opts ? new DatabaseSync(":memory:", opts) : new DatabaseSync(":memory:");
+// Track created in-memory DB instances so we can close them after each test.
+const openDbs: any[] = [];
+
+function makeDb(opts?: { readOnly?: boolean }): any {
+  const db = opts ? new DatabaseSync(":memory:", opts) : new DatabaseSync(":memory:");
+  openDbs.push(db);
+  return db;
 }
 
-function createChunksTable(db: InstanceType<typeof DatabaseSync>) {
+afterEach(() => {
+  for (const db of openDbs.splice(0)) {
+    try {
+      db.close();
+    } catch {
+      // ignore – db may already be closed
+    }
+  }
+});
+
+function createChunksTable(db: any) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS chunks (
       id TEXT PRIMARY KEY,
@@ -35,9 +65,21 @@ function createChunksTable(db: InstanceType<typeof DatabaseSync>) {
   `);
 }
 
+/** Create a temp directory containing a valid SQLite DB at <dir>/memory/index.sqlite.
+ *  Caller is responsible for cleanup via rmSync. */
+function createTempSqliteDir(): { tempDir: string } {
+  const tempDir = mkdtempSync(join(tmpdir(), "wopr-persistence-test-"));
+  const memDir = join(tempDir, "memory");
+  mkdirSync(memDir);
+  const db = new DatabaseSync(join(memDir, "index.sqlite"));
+  createChunksTable(db);
+  db.close();
+  return { tempDir };
+}
+
 // ─── getDb ───────────────────────────────────────────────────────────────────
 
-describe("getDb", () => {
+describe.skipIf(!hasSqlite)("getDb", () => {
   it("returns db from extension", () => {
     const db = makeDb();
     const api = { getExtension: () => db };
@@ -52,7 +94,7 @@ describe("getDb", () => {
 
 // ─── ensureEmbeddingColumn ────────────────────────────────────────────────────
 
-describe("ensureEmbeddingColumn", () => {
+describe.skipIf(!hasSqlite)("ensureEmbeddingColumn", () => {
   it("adds embedding column when missing", () => {
     const db = makeDb();
     db.exec(`CREATE TABLE chunks (id TEXT PRIMARY KEY, path TEXT)`);
@@ -90,8 +132,6 @@ describe("ensureEmbeddingColumn", () => {
   });
 
   it("logs warning on SQL error", () => {
-    const db = makeDb();
-    // No chunks table — PRAGMA won't fail but ALTER would if we simulate via mock
     const brokenDb = {
       prepare: () => ({ all: () => { throw new Error("boom"); } }),
       exec: vi.fn(),
@@ -104,7 +144,7 @@ describe("ensureEmbeddingColumn", () => {
 
 // ─── openDbForRead ────────────────────────────────────────────────────────────
 
-describe("openDbForRead", () => {
+describe.skipIf(!hasSqlite)("openDbForRead", () => {
   let origHome: string | undefined;
 
   beforeEach(() => {
@@ -135,18 +175,52 @@ describe("openDbForRead", () => {
   });
 
   it("returns null and warns when WOPR_HOME path does not exist", async () => {
-    process.env.WOPR_HOME = "/nonexistent-path-xyz-123";
-    const api = { getExtension: () => undefined };
-    const log = makeLog();
-    const result = await openDbForRead(api as any, log);
-    expect(result).toBeNull();
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("Cannot open DB directly"));
+    // Use a guaranteed-nonexistent sub-path of a fresh temp dir to avoid flakiness
+    const tempBase = mkdtempSync(join(tmpdir(), "wopr-test-base-"));
+    process.env.WOPR_HOME = join(tempBase, "definitely-missing");
+    try {
+      const api = { getExtension: () => undefined };
+      const log = makeLog();
+      const result = await openDbForRead(api as any, log);
+      expect(result).toBeNull();
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("Cannot open DB directly"));
+    } finally {
+      rmSync(tempBase, { recursive: true, force: true });
+    }
+  });
+
+  it("opens a file-based DB directly and returns owned=true", async () => {
+    const { tempDir } = createTempSqliteDir();
+    process.env.WOPR_HOME = tempDir;
+    try {
+      const api = { getExtension: () => undefined };
+      const log = makeLog();
+      const result = await openDbForRead(api as any, log);
+      expect(result).not.toBeNull();
+      expect(result!.owned).toBe(true);
+      expect(result!.db).toBeDefined();
+      result!.db.close(); // close the owned handle we received
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("Opened direct read-only DB"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
 // ─── loadChunkMetadata ────────────────────────────────────────────────────────
 
-describe("loadChunkMetadata", () => {
+describe.skipIf(!hasSqlite)("loadChunkMetadata", () => {
+  let origHome: string | undefined;
+
+  beforeEach(() => {
+    origHome = process.env.WOPR_HOME;
+  });
+
+  afterEach(() => {
+    if (origHome === undefined) delete process.env.WOPR_HOME;
+    else process.env.WOPR_HOME = origHome;
+  });
+
   it("returns empty map when no db available", async () => {
     delete process.env.WOPR_HOME;
     const api = { getExtension: () => undefined };
@@ -233,11 +307,36 @@ describe("loadChunkMetadata", () => {
     expect(result.size).toBe(0);
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining("Failed to load"));
   });
+
+  it("reads from file-based DB and closes owned handle (owned=true cleanup)", async () => {
+    const { tempDir } = createTempSqliteDir();
+    process.env.WOPR_HOME = tempDir;
+    try {
+      // Seed the file DB with a row to verify data is returned via owned path
+      const setupDb = new DatabaseSync(join(tempDir, "memory", "index.sqlite"));
+      setupDb.prepare(
+        `INSERT INTO chunks (id, path, source, start_line, end_line, hash, text, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run("file-id1", "/from-file.ts", "file", 1, 5, "h", "file content", Date.now());
+      setupDb.close();
+
+      const api = { getExtension: () => undefined }; // force owned=true path
+      const log = makeLog();
+      const result = await loadChunkMetadata(api as any, log);
+      expect(result.size).toBe(1);
+      expect(result.get("file-id1")!.path).toBe("/from-file.ts");
+      // Verify the owned handle was closed by opening the file again for writing
+      const verifyDb = new DatabaseSync(join(tempDir, "memory", "index.sqlite"));
+      verifyDb.close();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── getHnswPath ──────────────────────────────────────────────────────────────
 
-describe("getHnswPath", () => {
+describe.skipIf(!hasSqlite)("getHnswPath", () => {
   let origHome: string | undefined;
 
   beforeEach(() => {
@@ -283,7 +382,7 @@ describe("getHnswPath", () => {
 
 // ─── persistNewEntryToDb ──────────────────────────────────────────────────────
 
-describe("persistNewEntryToDb", () => {
+describe.skipIf(!hasSqlite)("persistNewEntryToDb", () => {
   it("inserts entry into db", () => {
     const db = makeDb();
     createChunksTable(db);
