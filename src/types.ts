@@ -56,7 +56,8 @@ export interface SemanticMemoryConfig {
 
   // Storage
   store: {
-    path?: string; // SQLite database path
+    /** @deprecated unused; storage is derived from api.storage/WOPR_HOME */
+    path?: string;
     vectorEnabled: boolean;
   };
 
