@@ -389,11 +389,14 @@ export function registerMemoryTools(
         const sessionDir = getSessionDir(sessionName);
         const memoryDir = join(sessionDir, "memory");
 
+        // Resolve path against sessionDir, but restrict reads to memoryDir
+        // unless the file is a known ROOT_FILE (SOUL.md, IDENTITY.md, etc.)
         let filePath = join(sessionDir, relPath);
-        assertWithinBase(sessionDir, filePath);
-        if (!existsSync(filePath)) {
-          filePath = join(memoryDir, relPath);
-          assertWithinBase(memoryDir, filePath);
+        assertWithinBase(memoryDir, filePath);
+        if (!existsSync(filePath) && ROOT_FILES.includes(relPath)) {
+          const rootPath = join(sessionDir, relPath);
+          assertWithinBase(sessionDir, rootPath);
+          filePath = rootPath;
         }
         if (!existsSync(filePath))
           return { content: [{ type: "text", text: `File not found: ${relPath}` }], isError: true };
