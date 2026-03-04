@@ -109,7 +109,7 @@ describe("extractCaptureCandidate", () => {
     // A string that doesn't match any specific pattern
     const result = extractCaptureCandidate("Remember: deploy on Friday");
     // "remember" triggers higher importance but category detection is separate
-    expect(result.category).toBeDefined();
+    expect(result.category).toBe("other");
   });
 
   it("should score explicit memory requests higher", () => {
