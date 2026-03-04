@@ -152,7 +152,7 @@ export function registerMemoryTools(
   instanceId?: string,
 ): void {
   // A2A tools require registerTool method (not yet in @wopr-network/plugin-types v0.2.0)
-  if (typeof (ctx as any).registerTool !== "function") {
+  if (typeof (ctx as { registerTool?: unknown }).registerTool !== "function") {
     ctx.log.warn(
       "[memory-semantic] ctx.registerTool not available — A2A memory tools will not be registered. " +
         "Upgrade @wopr-network/plugin-types or ensure the host provides registerTool.",
@@ -632,7 +632,7 @@ const TOOL_NAMES = ["memory_read", "memory_write", "memory_search", "memory_get"
  * Requires ctx to have an unregisterTool method.
  */
 export function unregisterMemoryTools(ctx: WOPRPluginContext): void {
-  if (!("unregisterTool" in ctx)) {
+  if (typeof (ctx as { unregisterTool?: unknown }).unregisterTool !== "function") {
     ctx.log.warn("[memory-semantic] ctx.unregisterTool not available — A2A memory tools cannot be unregistered.");
     return;
   }
