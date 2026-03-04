@@ -85,11 +85,13 @@ export function createMemoryPluginSchema(resolvedInstanceId: string | undefined)
       // v1 → v2: Add instance_id column for multi-tenant isolation
       if (fromVersion < 2 && toVersion >= 2) {
         await storage.raw(`ALTER TABLE memory_chunks ADD COLUMN instance_id TEXT`).catch(() => {
-          /* column may already exist */
+          /* non-fatal: column may already exist */
         });
         await storage
           .raw(`CREATE INDEX IF NOT EXISTS idx_memory_chunks_instance_id ON memory_chunks(instance_id)`)
-          .catch(() => {});
+          .catch(() => {
+            /* non-fatal: index may already exist */
+          });
         // Tag all existing chunks with the resolved instanceId.
         // Using the caller-supplied value (config.instanceId || env var) instead of
         // reading process.env.WOPR_INSTANCE_ID directly avoids a mismatch when
@@ -182,7 +184,9 @@ async function migrateFromLegacyIndexSqlite(storage: StorageApi): Promise<void> 
     // If ATTACH or migration SQL fails, detach and rethrow
     try {
       await storage.raw(`DETACH DATABASE legacy`);
-    } catch {}
+    } catch {
+      /* non-fatal: DETACH may fail if ATTACH never completed */
+    }
     throw err;
   }
 
