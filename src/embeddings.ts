@@ -3,22 +3,9 @@
  * Supports OpenAI, Gemini, and local (node-llama-cpp)
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import OpenAI from "openai";
-import winston from "winston";
+import { fallbackLogger as log } from "./fallback-logger.js";
 import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
-
-const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
-try {
-  mkdirSync(logsDir, { recursive: true });
-} catch {}
-
-const log = winston.createLogger({
-  defaultMeta: { service: "ollama-embed" },
-  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-  transports: [new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" })],
-});
 
 // =============================================================================
 // OpenAI Embeddings (uses openai SDK v6)

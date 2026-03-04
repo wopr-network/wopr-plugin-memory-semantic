@@ -21,6 +21,10 @@ export class EmbeddingQueue {
     this.log = log;
   }
 
+  setLogger(log: EmbeddingQueueLogger): void {
+    this.log = log;
+  }
+
   get bootstrapping(): boolean {
     return this._bootstrapping;
   }

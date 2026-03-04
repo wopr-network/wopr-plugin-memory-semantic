@@ -5,26 +5,10 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
-import winston from "winston";
+import { fallbackLogger as log } from "./fallback-logger.js";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
-
-const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
-try {
-  mkdirSync(logsDir, { recursive: true });
-} catch {}
-
-const log = winston.createLogger({
-  level: "debug",
-  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-  defaultMeta: { service: "semantic-search" },
-  transports: [
-    new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
-    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
-    new winston.transports.Console({ level: "warn" }),
-  ],
-});
 
 // =============================================================================
 // Hybrid Search Helpers (ported from WOPR core)

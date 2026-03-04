@@ -10,10 +10,7 @@
  * - Auto-capture: extract and store important information from conversations
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import type { WOPRPlugin, WOPRPluginContext } from "@wopr-network/plugin-types";
-import winston from "winston";
 import { unregisterMemoryTools } from "./a2a-tools.js";
 import { stopWatcher } from "./core-memory/watcher.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
@@ -40,22 +37,6 @@ interface PluginContext extends WOPRPluginContext {
 let ctx: PluginContext | null = null;
 const cleanups: Array<() => void> = [];
 
-const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
-try {
-  mkdirSync(logsDir, { recursive: true });
-} catch {}
-
-const log = winston.createLogger({
-  level: "debug",
-  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-  defaultMeta: { service: "semantic-memory" },
-  transports: [
-    new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
-    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
-    new winston.transports.Console({ level: "warn" }),
-  ],
-});
-
 // =============================================================================
 // Plugin State
 // =============================================================================
@@ -71,7 +52,7 @@ const state: PluginState = {
   instanceId: undefined,
 };
 
-const embeddingQueue = new EmbeddingQueue(log);
+const embeddingQueue = new EmbeddingQueue({ info: console.info, error: console.error });
 
 // =============================================================================
 // Plugin Export
@@ -124,22 +105,16 @@ const plugin: WOPRPlugin & {
 
   async init(api: WOPRPluginContext) {
     ctx = api as PluginContext;
-
-    // Override ctx.log to use our file-backed winston logger
-    ctx.log = {
-      info: (msg: string) => log.info(msg),
-      warn: (msg: string) => log.warn(msg),
-      error: (msg: string) => log.error(msg),
-      debug: (msg: string) => log.debug(msg),
-    };
-    ctx.log.info("[semantic-memory] init() called");
+    const log = ctx.log;
+    embeddingQueue.setLogger(log);
+    log.info("[semantic-memory] init() called");
 
     // Clean up previous registrations if re-initialized
     for (let i = cleanups.length - 1; i >= 0; i--) {
       try {
         cleanups[i]();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        log.warn(`[semantic-memory] re-init cleanup[${i}] threw: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     cleanups.length = 0;
@@ -162,7 +137,7 @@ const plugin: WOPRPlugin & {
     cleanups.push(...state.eventCleanup);
 
     if (!state.initialized) {
-      ctx.log.error("[semantic-memory] Initialization failed — plugin will not activate");
+      log.error("[semantic-memory] Initialization failed — plugin will not activate");
       return;
     }
 
@@ -216,28 +191,29 @@ const plugin: WOPRPlugin & {
     );
 
     // Hook into memory:search to provide semantic results
-    const unsubSearch = ctx.events.on("memory:search", (payload: any) => handleMemorySearch(state, ctx!.log, payload));
+    const unsubSearch = ctx.events.on("memory:search", (payload: any) => handleMemorySearch(state, log, payload));
 
     cleanups.push(unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch);
     state.eventCleanup = [unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch];
-    ctx.log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
+    log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 
   async shutdown() {
     if (!ctx) return; // Idempotent
+    const shutdownLog = ctx.log;
 
     // Stop the embedding queue first
     embeddingQueue.clear();
 
     // Stop file watcher
-    await stopWatcher(ctx.log);
+    await stopWatcher(shutdownLog);
 
     // Run all cleanup functions in reverse order (event unsubs, extension, context provider, configSchema)
     for (let i = cleanups.length - 1; i >= 0; i--) {
       try {
         cleanups[i]();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        shutdownLog.warn(`[semantic-memory] cleanup[${i}] threw: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     cleanups.length = 0;
