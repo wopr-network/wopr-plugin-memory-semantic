@@ -1,5 +1,8 @@
 import type { SemanticSearchManager, VectorEntry } from "./search.js";
 
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
+
 export type PendingEntry = { entry: Omit<VectorEntry, "embedding">; text: string; persist?: boolean };
 
 export type PersistFn = (id: string) => void;
@@ -84,6 +87,30 @@ export class EmbeddingQueue {
           }
         } catch (err) {
           this.log.error(`[queue] batch failed: ${err instanceof Error ? err.message : err}`);
+          // Re-queue entries that haven't exceeded retry limit
+          const retriable: PendingEntry[] = [];
+          const dropped: PendingEntry[] = [];
+          for (const entry of batch) {
+            const retryCount = ((entry as any)._retryCount ?? 0) + 1;
+            (entry as any)._retryCount = retryCount;
+            if (retryCount <= MAX_RETRIES) {
+              retriable.push(entry);
+            } else {
+              dropped.push(entry);
+            }
+          }
+          if (dropped.length > 0) {
+            this.log.error(
+              `[queue] permanently dropping ${dropped.length} entries after ${MAX_RETRIES} retries: ${dropped.map((e) => e.entry.id).join(", ")}`,
+            );
+          }
+          if (retriable.length > 0) {
+            this.queue.unshift(...retriable);
+            const maxRetry = Math.max(...retriable.map((e) => (e as any)._retryCount ?? 1));
+            const backoffMs = BASE_BACKOFF_MS * 2 ** (maxRetry - 1);
+            this.log.info(`[queue] re-queued ${retriable.length} entries, backoff ${backoffMs}ms`);
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          }
         }
       }
     } finally {
