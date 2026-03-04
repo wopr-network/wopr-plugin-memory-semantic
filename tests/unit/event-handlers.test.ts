@@ -15,7 +15,7 @@ import { handleFilesChanged, handleMemorySearch } from "../../src/event-handlers
 import { multiScaleChunk } from "../../src/chunking.js";
 
 function makeLog() {
-  return { info: vi.fn(), error: vi.fn() };
+  return { info: vi.fn(), error: vi.fn(), debug: vi.fn() };
 }
 
 function makeSearchManager() {
@@ -275,12 +275,15 @@ describe("handleFilesChanged", () => {
 describe("handleMemorySearch", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("logs the query on entry", async () => {
+  it("logs the query at debug level (not info) on entry", async () => {
     const state = makeSearchState({ initialized: false });
     const log = makeLog();
     const payload = { query: "my query", maxResults: 5, minScore: 0.5, sessionName: "s", results: null };
     await handleMemorySearch(state as any, log, payload);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("my query"));
+    expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("my query"));
+    for (const call of log.info.mock.calls) {
+      expect(call[0]).not.toContain("my query");
+    }
   });
 
   it("returns early when state.initialized is false", async () => {

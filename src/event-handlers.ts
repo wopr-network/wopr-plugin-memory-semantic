@@ -24,6 +24,7 @@ interface SearchState {
 interface ContextLogger {
   info(msg: string): void;
   error(msg: string): void;
+  debug(msg: string): void;
 }
 
 /** Handle memory:filesChanged — index new/updated file chunks via the embedding queue */
@@ -100,7 +101,7 @@ export async function handleMemorySearch(
     results: any[] | null;
   },
 ): Promise<void> {
-  log.info(`[semantic-memory] memory:search handler called for: "${payload.query}"`);
+  log.debug(`[semantic-memory] memory:search handler called for: "${payload.query}"`);
 
   if (!state.initialized || !state.searchManager) {
     log.info(`[semantic-memory] Not initialized, skipping (initialized=${state.initialized})`);
