@@ -244,6 +244,10 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
 });
 
 describe("createLocalEmbeddingProvider", () => {
+  afterEach(() => {
+    vi.unmock("node-llama-cpp");
+  });
+
   it("should throw when node-llama-cpp is not installed", async () => {
     vi.mock("node-llama-cpp", () => {
       throw new Error("Cannot find module 'node-llama-cpp'");
@@ -251,7 +255,6 @@ describe("createLocalEmbeddingProvider", () => {
     await expect(
       createLocalEmbeddingProvider(makeConfig({ provider: "local" })),
     ).rejects.toThrow(/node-llama-cpp/);
-    vi.unmock("node-llama-cpp");
   });
 });
 
