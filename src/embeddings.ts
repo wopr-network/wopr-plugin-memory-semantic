@@ -4,18 +4,8 @@
  */
 
 import OpenAI from "openai";
+import { fallbackLogger as log } from "./fallback-logger.js";
 import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
-
-const log = {
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  debug: (msg: string) => console.debug(`[semantic-memory] ${msg}`),
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  info: (msg: string) => console.info(`[semantic-memory] ${msg}`),
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  warn: (msg: string) => console.warn(`[semantic-memory] ${msg}`),
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  error: (msg: string) => console.error(`[semantic-memory] ${msg}`),
-};
 
 // =============================================================================
 // OpenAI Embeddings (uses openai SDK v6)

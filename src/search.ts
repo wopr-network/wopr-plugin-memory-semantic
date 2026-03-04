@@ -7,18 +7,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
+import { fallbackLogger as log } from "./fallback-logger.js";
 import type { EmbeddingProvider, MemorySearchResult, SemanticMemoryConfig } from "./types.js";
-
-const log = {
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  debug: (msg: string) => console.debug(`[semantic-memory] ${msg}`),
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  info: (msg: string) => console.info(`[semantic-memory] ${msg}`),
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  warn: (msg: string) => console.warn(`[semantic-memory] ${msg}`),
-  // biome-ignore lint/suspicious/noConsole: intentional fallback logging before ctx is available
-  error: (msg: string) => console.error(`[semantic-memory] ${msg}`),
-};
 
 // =============================================================================
 // Hybrid Search Helpers (ported from WOPR core)
