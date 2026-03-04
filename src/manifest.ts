@@ -33,6 +33,40 @@ export const pluginConfigSchema: ConfigSchema = {
       description: "Maximum byte size for memory_write content (default: 1048576 = 1 MB)",
       default: 1048576,
     },
+    {
+      name: "autoRecallEnabled",
+      type: "boolean",
+      label: "Auto-Recall Enabled",
+      description: "Automatically inject relevant memories into conversation context",
+      default: true,
+    },
+    {
+      name: "autoCaptureEnabled",
+      type: "boolean",
+      label: "Auto-Capture Enabled",
+      description: "Automatically extract and store memories from conversations",
+      default: true,
+    },
+    {
+      name: "instanceId",
+      type: "text",
+      label: "Instance ID",
+      description: "Unique identifier for multi-tenant memory isolation",
+    },
+    {
+      name: "searchMaxResults",
+      type: "number",
+      label: "Search Max Results",
+      description: "Maximum number of results returned by semantic search (default: 10)",
+      default: 10,
+    },
+    {
+      name: "searchHybridWeight",
+      type: "number",
+      label: "Hybrid Search Vector Weight",
+      description: "Weight of vector similarity vs text matching in hybrid search (0-1, default: 0.7)",
+      default: 0.7,
+    },
   ],
 };
 
