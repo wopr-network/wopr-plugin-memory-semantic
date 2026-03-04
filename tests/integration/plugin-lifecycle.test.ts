@@ -150,11 +150,11 @@ describe("plugin lifecycle", () => {
     });
 
     it("should throw if search is called before init", async () => {
-      await expect(plugin.search("test query")).rejects.toThrow("not initialized");
+      await expect(plugin.search("test query")).rejects.toThrow("Semantic memory not initialized");
     });
 
     it("should throw if capture is called before init", async () => {
-      await expect(plugin.capture("some text")).rejects.toThrow("not initialized");
+      await expect(plugin.capture("some text")).rejects.toThrow("Semantic memory not initialized");
     });
   });
 
