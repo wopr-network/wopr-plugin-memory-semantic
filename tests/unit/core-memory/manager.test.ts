@@ -112,6 +112,49 @@ describe("MemoryIndexManager.search", () => {
     // Results may be empty if sync is triggered and fails gracefully
     expect(Array.isArray(results)).toBe(true);
   });
+
+  it("includes legacy rows (OR instance_id IS NULL) by default for tenant-scoped queries", async () => {
+    const storage = mockStorage();
+    const capturedSqls: string[] = [];
+    vi.mocked(storage.raw).mockImplementation(async (sql: string) => {
+      capturedSqls.push(sql);
+      return [];
+    });
+    const manager = await createManager({ storage });
+    await manager.search("some query", { instanceId: "tenant-1" });
+    const ftsSql = capturedSqls.find((s) => s.includes("memory_chunks_fts"));
+    expect(ftsSql).toBeDefined();
+    expect(ftsSql).toContain("c.instance_id IS NULL");
+  });
+
+  it("excludes legacy rows when excludeLegacyEntries=true for tenant-scoped queries", async () => {
+    const storage = mockStorage();
+    const capturedSqls: string[] = [];
+    vi.mocked(storage.raw).mockImplementation(async (sql: string) => {
+      capturedSqls.push(sql);
+      return [];
+    });
+    const manager = await createManager({ storage });
+    await manager.search("some query", { instanceId: "tenant-1", excludeLegacyEntries: true });
+    const ftsSql = capturedSqls.find((s) => s.includes("memory_chunks_fts"));
+    expect(ftsSql).toBeDefined();
+    expect(ftsSql).not.toContain("c.instance_id IS NULL");
+    expect(ftsSql).toContain("c.instance_id = ?");
+  });
+
+  it("does not apply instance filter when no instanceId is provided", async () => {
+    const storage = mockStorage();
+    const capturedSqls: string[] = [];
+    vi.mocked(storage.raw).mockImplementation(async (sql: string) => {
+      capturedSqls.push(sql);
+      return [];
+    });
+    const manager = await createManager({ storage });
+    await manager.search("some query", { excludeLegacyEntries: true });
+    const ftsSql = capturedSqls.find((s) => s.includes("memory_chunks_fts"));
+    expect(ftsSql).toBeDefined();
+    expect(ftsSql).not.toContain("c.instance_id");
+  });
 });
 
 describe("MemoryIndexManager.handleFilesChanged", () => {

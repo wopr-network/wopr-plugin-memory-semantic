@@ -37,7 +37,7 @@ src/
 
 ## Known Limitations
 
-- **Legacy entry visibility (WOP-1553):** The HNSW index is shared across all tenants. Entries created before multi-tenancy (with `instanceId === undefined`) are visible to all tenant-scoped queries by default. To exclude them, set `search.excludeLegacyEntries: true` in config. To permanently fix, use `backfillLegacyInstanceId()` from `persistence.ts` to assign an instanceId to all legacy rows, then restart the plugin so the HNSW index is rebuilt from the updated database.
+- **Legacy entry visibility (WOP-1553):** The HNSW index is shared across all tenants. Entries created before multi-tenancy (with `instanceId === undefined`) are visible to all tenant-scoped queries by default. To exclude them at runtime, set `search.excludeLegacyEntries: true` in config (this filters both HNSW vector results and FTS keyword results). To permanently fix, use `backfillLegacyInstanceId()` from `persistence.ts` to assign an instanceId to all legacy rows in SQLite — **however, you must also delete the HNSW `.bin` and `.map.json` files and restart** to force an index rebuild, since runtime queries use the in-memory HNSW metadata loaded from disk at startup.
 
 ## Plugin Contract
 
