@@ -24,6 +24,25 @@ export class PathTraversalError extends Error {
   }
 }
 
+/** Regex for safe session names: alphanumeric, hyphens, underscores, 1-64 chars */
+const SAFE_SESSION_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/** Windows reserved device names (case-insensitive) */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+
+/**
+ * Validate that a session name is a safe filesystem identifier.
+ * Rejects null bytes, path separators, special characters, Windows reserved
+ * names, empty strings, and names longer than 64 characters.
+ */
+export function validateSessionName(name: string): void {
+  if (!SAFE_SESSION_NAME.test(name) || WINDOWS_RESERVED.test(name)) {
+    throw new Error(
+      `Invalid session name: "${name}". Must match ${SAFE_SESSION_NAME} and not be a Windows reserved name.`,
+    );
+  }
+}
+
 /**
  * Throw if filePath escapes baseDir.
  * Uses realpathSync to resolve symlinks so symlink-based escapes are also caught.
@@ -133,6 +152,7 @@ export function registerMemoryTools(
 
   // Helper to get session dir from context — validates sessionName cannot escape SESSIONS_DIR
   const getSessionDir = (sessionName: string) => {
+    validateSessionName(sessionName);
     const dir = join(SESSIONS_DIR, sessionName);
     assertWithinBase(SESSIONS_DIR, dir);
     return dir;
