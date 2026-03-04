@@ -83,6 +83,9 @@ export interface SemanticMemoryConfig {
 
   /** Instance ID for multi-tenant isolation. Set by the daemon per bot instance. */
   instanceId?: string;
+
+  /** Maximum byte size for a single memory_write call. Default: 1_048_576 (1 MB). */
+  maxWriteBytes?: number;
 }
 
 export const DEFAULT_CONFIG: SemanticMemoryConfig = {

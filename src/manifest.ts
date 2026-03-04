@@ -26,6 +26,13 @@ export const pluginConfigSchema: ConfigSchema = {
       description: "Model name for embeddings",
       default: "text-embedding-3-small",
     },
+    {
+      name: "maxWriteBytes",
+      type: "number",
+      label: "Max Write Size (bytes)",
+      description: "Maximum byte size for memory_write content (default: 1048576 = 1 MB)",
+      default: 1048576,
+    },
   ],
 };
 

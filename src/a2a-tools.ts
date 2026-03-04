@@ -19,6 +19,13 @@ const SELF_REFLECT_SECTION_MAX_BYTES = 256;
 /** Upper bound for search results to prevent FTS5 full-scan DoS. */
 export const MAX_SEARCH_RESULTS = 100;
 
+/** Maximum allowed byte length for memory_write content. */
+export const MEMORY_WRITE_MAX_BYTES = 1_048_576; // 1 MB
+
+/** Separator inserted between existing content and new content on append. */
+const MEMORY_APPEND_SEPARATOR = "\n\n";
+const MEMORY_APPEND_SEPARATOR_BYTES = Buffer.byteLength(MEMORY_APPEND_SEPARATOR, "utf-8");
+
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
   constructor(message = "Path outside allowed directory") {
@@ -302,6 +309,19 @@ export function registerMemoryTools(
     handler: async (args: { file: string; content: string; append?: boolean }, context: any) => {
       try {
         const { file, content, append } = args;
+
+        // Enforce content size limit to prevent disk exhaustion
+        const maxBytes = context.config?.maxWriteBytes ?? MEMORY_WRITE_MAX_BYTES;
+        const contentBytes = Buffer.byteLength(content, "utf-8");
+        if (contentBytes > maxBytes) {
+          return {
+            content: [
+              { type: "text", text: `Content exceeds maximum size of ${maxBytes} bytes (got ${contentBytes})` },
+            ],
+            isError: true,
+          };
+        }
+
         const sessionName = context.sessionName || "default";
         const sessionDir = getSessionDir(sessionName);
         const memoryDir = join(sessionDir, "memory");
@@ -329,8 +349,20 @@ export function registerMemoryTools(
         const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
         if (shouldAppend && existsSync(filePath)) {
-          const existing = readFileSync(filePath, "utf-8");
-          writeFileSync(filePath, `${existing}\n\n${content}`);
+          const existingBytes = lstatSync(filePath).size;
+          const combinedBytes = existingBytes + MEMORY_APPEND_SEPARATOR_BYTES + contentBytes;
+          if (combinedBytes > maxBytes) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Appended content exceeds maximum size of ${maxBytes} bytes (would be ${combinedBytes})`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          writeFileSync(filePath, `${MEMORY_APPEND_SEPARATOR}${content}`, { flag: "a" });
         } else {
           writeFileSync(filePath, content);
         }
