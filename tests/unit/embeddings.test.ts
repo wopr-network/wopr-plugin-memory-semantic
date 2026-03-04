@@ -9,17 +9,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider, createOpenAiEmbeddingProvider, createGeminiEmbeddingProvider, sanitizeAndNormalizeEmbedding } from "../../src/embeddings.js";
 import { DEFAULT_CONFIG, type SemanticMemoryConfig } from "../../src/types.js";
 
-function snapshotEnv(keys: string[]): () => void {
-  const saved: Record<string, string | undefined> = {};
-  for (const key of keys) saved[key] = process.env[key];
-  return () => {
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  };
-}
-
 function makeConfig(overrides: Partial<SemanticMemoryConfig> = {}): SemanticMemoryConfig {
   return { ...DEFAULT_CONFIG, ...overrides };
 }
@@ -80,15 +69,18 @@ describe("sanitizeAndNormalizeEmbedding", () => {
 // Provider factory error handling
 // =============================================================================
 
-describe.sequential("createOpenAiEmbeddingProvider", () => {
-  let restoreEnv: () => void;
+describe("createOpenAiEmbeddingProvider", () => {
+  let savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    restoreEnv = snapshotEnv(["OPENAI_API_KEY"]);
+    savedEnv = { OPENAI_API_KEY: process.env.OPENAI_API_KEY };
   });
 
   afterEach(() => {
-    restoreEnv();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   it("should throw when no API key is available", async () => {
@@ -100,15 +92,21 @@ describe.sequential("createOpenAiEmbeddingProvider", () => {
   });
 });
 
-describe.sequential("createGeminiEmbeddingProvider", () => {
-  let restoreEnv: () => void;
+describe("createGeminiEmbeddingProvider", () => {
+  let savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    restoreEnv = snapshotEnv(["GOOGLE_API_KEY", "GEMINI_API_KEY"]);
+    savedEnv = {
+      GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    };
   });
 
   afterEach(() => {
-    restoreEnv();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   it("should throw when no API key is available", async () => {
@@ -121,15 +119,22 @@ describe.sequential("createGeminiEmbeddingProvider", () => {
   });
 });
 
-describe.sequential("createEmbeddingProvider", () => {
-  let restoreEnv: () => void;
+describe("createEmbeddingProvider", () => {
+  let savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    restoreEnv = snapshotEnv(["OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]);
+    savedEnv = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    };
   });
 
   afterEach(() => {
-    restoreEnv();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   it("should route to OpenAI provider when provider is 'openai'", async () => {
