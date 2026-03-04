@@ -166,6 +166,82 @@ describe("registerMemoryTools", () => {
       );
     });
 
+    it("should throw when query is a non-string truthy value", async () => {
+      registerMemoryTools(registry, API_BASE);
+      const tool = getTool(registry, "searchMemory");
+      await expect(tool.handler({ query: 2024 }, {})).rejects.toThrow(
+        "Parameter 'query' is required",
+      );
+      await expect(tool.handler({ query: { q: "foo" } }, {})).rejects.toThrow(
+        "Parameter 'query' is required",
+      );
+    });
+
+    it("should throw when query is an empty string", async () => {
+      registerMemoryTools(registry, API_BASE);
+      const tool = getTool(registry, "searchMemory");
+      await expect(tool.handler({ query: "" }, {})).rejects.toThrow(
+        "Parameter 'query' is required",
+      );
+    });
+
+    it("should strip invalid XML control characters from query", async () => {
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ session: "default", response: "ok" }),
+      );
+      registerMemoryTools(registry, API_BASE);
+
+      const tool = getTool(registry, "searchMemory");
+      // \x00 (null), \x01, \x07 (bell) are invalid in XML 1.0 and should be stripped
+      await tool.handler({ query: "hello\x00world\x01\x07" }, {});
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.message).toContain("<query>helloworld</query>");
+      expect(body.message).not.toContain("\x00");
+      expect(body.message).not.toContain("\x01");
+    });
+
+    it("should cap query at 2000 characters", async () => {
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ session: "default", response: "ok" }),
+      );
+      registerMemoryTools(registry, API_BASE);
+
+      const tool = getTool(registry, "searchMemory");
+      const longQuery = "a".repeat(3000);
+      await tool.handler({ query: longQuery }, {});
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.message).toContain("<query>" + "a".repeat(2000) + "</query>");
+      expect(body.message).not.toContain("a".repeat(2001));
+    });
+
+    it("should floor non-integer limit values", async () => {
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ session: "default", response: "ok" }),
+      );
+      registerMemoryTools(registry, API_BASE);
+
+      const tool = getTool(registry, "searchMemory");
+      await tool.handler({ query: "test", limit: 7.9 }, {});
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.message).toContain("<max_results>7</max_results>");
+    });
+
+    it("should default limit to 10 when Infinity is passed", async () => {
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ session: "default", response: "ok" }),
+      );
+      registerMemoryTools(registry, API_BASE);
+
+      const tool = getTool(registry, "searchMemory");
+      await tool.handler({ query: "test", limit: Infinity }, {});
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.message).toContain("<max_results>10</max_results>");
+    });
+
     it("should include bearer token when auth.token is present", async () => {
       mockFetch.mockResolvedValue(
         mockJsonResponse({ session: "default", response: "ok" }),
