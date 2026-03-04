@@ -78,6 +78,8 @@ describe("initialize failure paths", () => {
   let queue: EmbeddingQueue;
   let savedInstanceId: string | undefined;
 
+  let savedInstanceId: string | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
     api = makeApi();
@@ -115,6 +117,11 @@ describe("initialize failure paths", () => {
     } else {
       process.env.WOPR_INSTANCE_ID = savedInstanceId;
     }
+  });
+
+  afterEach(() => {
+    if (savedInstanceId === undefined) delete process.env.WOPR_INSTANCE_ID;
+    else process.env.WOPR_INSTANCE_ID = savedInstanceId;
   });
 
   it("logs error when storage.register throws", async () => {
