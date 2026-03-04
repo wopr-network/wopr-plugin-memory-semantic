@@ -61,6 +61,11 @@ function createMockContext(): WOPRPluginContext & {
       apiKey: "test-key-fake",
     })),
     getExtension: vi.fn(() => null),
+    registerConfigSchema: vi.fn(),
+    unregisterConfigSchema: vi.fn(),
+    registerContextProvider: vi.fn(),
+    unregisterContextProvider: vi.fn(),
+    registerExtension: vi.fn(),
     _handlers: handlers,
     _emit: async (event: string, payload: any) => {
       const list = handlers.get(event) || [];
@@ -144,5 +149,67 @@ describe("plugin lifecycle", () => {
 
   it("should throw if capture is called before init", async () => {
     await expect(plugin.capture("some text")).rejects.toThrow("not initialized");
+  });
+
+  it("should allow re-initialization after shutdown", async () => {
+    const ctx = createMockContext();
+    (ctx as any).storage = createStorageMock();
+
+    // First init
+    await plugin.init(ctx as any);
+    expect(plugin.getConfig()).toBeDefined();
+
+    // Shutdown
+    await plugin.shutdown();
+
+    // Re-init — this would hang forever before the fix because
+    // initInProgress stayed true after successful init
+    const ctx2 = createMockContext();
+    (ctx2 as any).storage = createStorageMock();
+    await plugin.init(ctx2 as any);
+
+    // Verify the plugin re-initialized successfully with the mock config's provider
+    const config = plugin.getConfig();
+    expect(config).toBeDefined();
+    expect(config.provider).toBe("openai");
+
+    // Clean up
+    await plugin.shutdown();
+  });
+
+  it("should reset initInProgress after a failed init so a second init can proceed", async () => {
+    const { createEmbeddingProvider } = await import("../../src/embeddings.js");
+    const mockCreate = vi.mocked(createEmbeddingProvider);
+
+    // First call throws — simulates a broken provider
+    mockCreate.mockRejectedValueOnce(new Error("provider unavailable"));
+
+    const ctx = createMockContext();
+    (ctx as any).storage = createStorageMock();
+
+    // The failed init should not throw (plugin swallows errors and logs them)
+    await plugin.init(ctx as any);
+
+    // Plugin should not be initialized after the failure
+    expect(plugin.getConfig()).toBeDefined(); // getConfig always works (returns state.config)
+
+    // Restore the mock to succeed for the retry
+    mockCreate.mockResolvedValue({
+      id: "mock-provider",
+      dimensions: 4,
+      probe: vi.fn().mockResolvedValue(4),
+      embed: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3, 0.4]]),
+    } as any);
+
+    // Second init should succeed because initInProgress was reset in the finally block
+    const ctx2 = createMockContext();
+    (ctx2 as any).storage = createStorageMock();
+    await plugin.init(ctx2 as any);
+
+    // Verify we can now call search without "not initialized" error
+    await expect(plugin.search("test")).resolves.toBeDefined();
+
+    // Clean up
+    await plugin.shutdown();
   });
 });
