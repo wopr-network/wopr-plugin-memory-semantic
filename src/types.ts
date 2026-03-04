@@ -28,6 +28,8 @@ export interface SemanticMemoryConfig {
     maxResults: number;
     minScore: number;
     candidateMultiplier: number;
+    /** When true, tenant-scoped queries exclude entries with no instanceId (legacy/global). Default: false. */
+    excludeLegacyEntries: boolean;
   };
 
   // Hybrid search weights
@@ -95,6 +97,7 @@ export const DEFAULT_CONFIG: SemanticMemoryConfig = {
     maxResults: 10,
     minScore: 0.3,
     candidateMultiplier: 3,
+    excludeLegacyEntries: false,
   },
   hybrid: {
     enabled: true,

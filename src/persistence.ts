@@ -159,3 +159,25 @@ export function persistNewEntryToDb(
     log.warn(`persistNewEntryToDb failed for ${id}: ${err instanceof Error ? err.message : err}`);
   }
 }
+
+/**
+ * Backfill instanceId on legacy entries (those with NULL instance_id).
+ * Returns the number of rows updated.
+ */
+export function backfillLegacyInstanceId(api: PluginContextLike, instanceId: string, log: PersistenceLogger): number {
+  const db = getDb(api);
+  if (!db) {
+    log.warn("backfillLegacyInstanceId: no database handle available");
+    return 0;
+  }
+
+  try {
+    const result = db.prepare(`UPDATE chunks SET instance_id = ? WHERE instance_id IS NULL`).run(instanceId);
+    const count = typeof result.changes === "number" ? result.changes : 0;
+    log.info(`Backfilled ${count} legacy entries with instanceId=${instanceId}`);
+    return count;
+  } catch (err) {
+    log.error(`backfillLegacyInstanceId failed: ${err instanceof Error ? err.message : err}`);
+    return 0;
+  }
+}
