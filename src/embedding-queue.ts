@@ -58,7 +58,12 @@ export class EmbeddingQueue {
       added++;
     }
     this.log.info(`[queue] enqueued ${added} entries from ${source} (${this.queue.length} total pending)`);
-    this.drainPromise = this.drain();
+    if (!this.drainPromise) {
+      const p = this.drain().finally(() => {
+        if (this.drainPromise === p) this.drainPromise = null;
+      });
+      this.drainPromise = p;
+    }
   }
 
   /** Run bootstrap: enqueue all chunks and process to completion before anything else. */
