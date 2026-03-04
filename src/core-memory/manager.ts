@@ -6,6 +6,7 @@ import path from "node:path";
 import type { PluginLogger, StorageApi, WOPREventBus } from "@wopr-network/plugin-types";
 import type { SessionApi } from "../types.js";
 import { buildFileEntry, chunkMarkdown, hashText, listMemoryFiles } from "./internal.js";
+import { runWithConcurrency } from "./run-with-concurrency.js";
 import { syncSessionFiles } from "./sync-sessions.js";
 import {
   DEFAULT_MEMORY_CONFIG,
@@ -350,14 +351,17 @@ export class MemoryIndexManager {
     }
 
     // Session transcripts — index one file at a time to avoid OOM
+    let transcriptErrors = false;
     if (this.config.sync.indexSessions !== false) {
       this.log.info(`[memory-sync] starting transcript streaming (heap: ${heapMB()}MB)`);
-      await this.syncSessionTranscriptsStreaming(needsFullReindex);
+      transcriptErrors = await this.syncSessionTranscriptsStreaming(needsFullReindex);
       this.log.info(`[memory-sync] transcripts done (heap: ${heapMB()}MB)`);
     }
 
     await this.writeMeta();
-    this.dirty = false;
+    if (!transcriptErrors) {
+      this.dirty = false;
+    }
     this.log.info(`[memory-sync] complete (heap: ${heapMB()}MB)`);
   }
 
@@ -366,7 +370,8 @@ export class MemoryIndexManager {
    * can be processed and GC'd before loading the next. Prevents OOM from
    * accumulating all 50MB+ of session JSONL in memory at once.
    */
-  private async syncSessionTranscriptsStreaming(needsFullReindex: boolean): Promise<void> {
+  private async syncSessionTranscriptsStreaming(needsFullReindex: boolean): Promise<boolean> {
+    let hadErrors = false;
     await syncSessionFiles({
       storage: this.storage,
       sessionsDir: this.sessionsDir,
@@ -376,7 +381,11 @@ export class MemoryIndexManager {
       ftsAvailable: this.fts.available,
       model: "fts5",
       dirtyFiles: new Set(),
-      runWithConcurrency: (tasks, concurrency) => this.runWithConcurrency(tasks, concurrency),
+      runWithConcurrency: async (tasks, concurrency) => {
+        const result = await this.runWithConcurrency(tasks, concurrency);
+        if (result.hadErrors) hadErrors = true;
+        return result;
+      },
       sessionApi: this.sessionApi,
       indexSessionFile: async (entry) => {
         const chunks = chunkMarkdown(entry.content, this.config.chunking);
@@ -403,6 +412,7 @@ export class MemoryIndexManager {
       concurrency: 1, // One at a time to keep memory bounded
       log: this.log,
     });
+    return hadErrors;
   }
 
   private async scanMemoryFiles(params: {
@@ -594,27 +604,13 @@ export class MemoryIndexManager {
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
-  private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
-    const results: T[] = [];
-    const executing: Set<Promise<void>> = new Set();
-
-    for (const task of tasks) {
-      const p = task()
-        .then((result) => {
-          results.push(result);
-        })
-        .finally(() => {
-          executing.delete(p);
-        });
-      executing.add(p);
-
-      if (executing.size >= concurrency) {
-        await Promise.race(executing);
-      }
-    }
-
-    await Promise.all(executing);
-    return results;
+  private async runWithConcurrency<T>(
+    tasks: Array<() => Promise<T>>,
+    concurrency: number,
+  ): Promise<{ results: T[]; hadErrors: boolean }> {
+    return runWithConcurrency(tasks, concurrency, (err) => {
+      this.log.warn("[manager] runWithConcurrency task failed", err);
+    });
   }
 
   async status(): Promise<{
