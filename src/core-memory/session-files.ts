@@ -1,7 +1,7 @@
 // Session file indexing - adapted from OpenClaw for WOPR
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { StorageApi } from "@wopr-network/plugin-types";
+import type { PluginLogger, StorageApi } from "@wopr-network/plugin-types";
 import type { SessionApi } from "../types.js";
 import { hashText } from "./internal.js";
 
@@ -195,14 +195,14 @@ export async function getRecentSessionContent(
 /**
  * List active session names from SQL (replaces filesystem scan for .conversation.jsonl)
  */
-export async function listSessionNames(storage: StorageApi): Promise<string[]> {
+export async function listSessionNames(storage: StorageApi, log: PluginLogger): Promise<string[]> {
   try {
     const rows = (await storage.raw(`SELECT name FROM sessions WHERE status = ?`, ["active"])) as Array<{
       name: string;
     }>;
     return rows.map((r) => r.name);
   } catch (error) {
-    console.warn("[session-files] Failed to list active SQL-backed session names", error);
+    log.warn("[session-files] Failed to list active SQL-backed session names", error);
     return [];
   }
 }
@@ -213,6 +213,7 @@ export async function listSessionNames(storage: StorageApi): Promise<string[]> {
 export async function buildSessionEntryFromSql(
   sessionName: string,
   sessionApi: SessionApi,
+  log: PluginLogger,
 ): Promise<SessionFileEntry | null> {
   try {
     const entries = await sessionApi.readConversationLog(sessionName);
@@ -241,7 +242,7 @@ export async function buildSessionEntryFromSql(
       content,
     };
   } catch (error) {
-    console.warn(`[session-files] Failed to build session entry from SQL for "${sessionName}"`, error);
+    log.warn(`[session-files] Failed to build session entry from SQL for "${sessionName}"`, error);
     return null;
   }
 }
@@ -252,6 +253,7 @@ export async function buildSessionEntryFromSql(
 export async function getRecentSessionContentFromSql(
   sessionName: string,
   sessionApi: SessionApi,
+  log: PluginLogger,
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
@@ -271,7 +273,7 @@ export async function getRecentSessionContentFromSql(
     const recentMessages = allMessages.slice(-messageCount);
     return recentMessages.length > 0 ? recentMessages.join("\n") : null;
   } catch (error) {
-    console.warn(`[session-files] Failed to get recent session content from SQL for "${sessionName}"`, error);
+    log.warn(`[session-files] Failed to get recent session content from SQL for "${sessionName}"`, error);
     return null;
   }
 }

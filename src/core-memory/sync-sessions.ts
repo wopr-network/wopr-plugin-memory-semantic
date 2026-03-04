@@ -24,7 +24,7 @@ export async function syncSessionFiles(params: {
     return;
   }
 
-  const sessionNames = await listSessionNames(params.storage);
+  const sessionNames = await listSessionNames(params.storage, params.log);
   const activePaths = new Set(sessionNames.map((name) => `sessions/${name}`));
   const indexAll = params.needsFullReindex || params.dirtyFiles.size === 0;
 
@@ -34,7 +34,7 @@ export async function syncSessionFiles(params: {
       return;
     }
 
-    const entry = await buildSessionEntryFromSql(sessionName, params.sessionApi!);
+    const entry = await buildSessionEntryFromSql(sessionName, params.sessionApi!, params.log);
     if (!entry) {
       return;
     }
