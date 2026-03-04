@@ -603,6 +603,11 @@ export class MemoryIndexManager {
         .then((result) => {
           results.push(result);
         })
+        .catch((err) => {
+          this.log.warn(
+            `[manager] runWithConcurrency task failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        })
         .finally(() => {
           executing.delete(p);
         });
