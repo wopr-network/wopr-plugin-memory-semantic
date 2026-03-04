@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createEmbeddingProvider, createOpenAiEmbeddingProvider, createGeminiEmbeddingProvider, sanitizeAndNormalizeEmbedding } from "../../src/embeddings.js";
+import { createEmbeddingProvider, createOpenAiEmbeddingProvider, createGeminiEmbeddingProvider, createLocalEmbeddingProvider, sanitizeAndNormalizeEmbedding } from "../../src/embeddings.js";
 import { DEFAULT_CONFIG, type SemanticMemoryConfig } from "../../src/types.js";
 
 function snapshotEnv(keys: string[]): () => void {
@@ -240,6 +240,18 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+describe("createLocalEmbeddingProvider", () => {
+  it("should throw when node-llama-cpp is not installed", async () => {
+    vi.mock("node-llama-cpp", () => {
+      throw new Error("Cannot find module 'node-llama-cpp'");
+    });
+    await expect(
+      createLocalEmbeddingProvider(makeConfig({ provider: "local" })),
+    ).rejects.toThrow(/node-llama-cpp/);
+    vi.unmock("node-llama-cpp");
   });
 });
 
