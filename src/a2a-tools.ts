@@ -12,8 +12,8 @@ import { parseTemporalFilter } from "./core-memory/types.js";
 
 /** Duck-type interface for plugin contexts that expose tool registration. */
 interface ContextWithTools extends WOPRPluginContext {
-  registerTool?: (...args: unknown[]) => unknown;
-  unregisterTool?: (...args: unknown[]) => unknown;
+  registerTool?: unknown;
+  unregisterTool?: unknown;
 }
 
 /** Maximum allowed byte length for self_reflect content fields. */
