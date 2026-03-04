@@ -24,6 +24,9 @@ function makeSearchManager(opts: { failCount?: number; existingIds?: string[] } 
       if (callCount <= (opts.failCount ?? 0)) {
         throw new Error("transient network error");
       }
+      // Simulate async work before updating the index, matching real SemanticSearchManager
+      // behavior where existingIds is only updated after awaiting embedBatch.
+      await Promise.resolve();
       for (const e of batch) existingIds.add(e.entry.id);
       return batch.length;
     }),
@@ -146,6 +149,7 @@ describe("EmbeddingQueue", () => {
       const queue = new EmbeddingQueue(log);
       // No attach() call
       expect(() => queue.enqueue([makeEntry("z")], "test")).not.toThrow();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -241,8 +245,8 @@ describe("EmbeddingQueue", () => {
       await vi.runAllTimersAsync();
 
       expect(persistFn).toHaveBeenCalledTimes(2);
-      expect(persistFn).toHaveBeenCalledWith("a");
-      expect(persistFn).toHaveBeenCalledWith("c");
+      expect(persistFn).toHaveBeenNthCalledWith(1, "a");
+      expect(persistFn).toHaveBeenNthCalledWith(2, "c");
     });
 
     it("should not call persistFn for entries with persist=false or unset", async () => {
@@ -252,7 +256,13 @@ describe("EmbeddingQueue", () => {
       const persistFn = vi.fn();
       queue.attach(sm as any, persistFn);
 
-      queue.enqueue([makeEntry("a", false), makeEntry("b")], "test");
+      // makeEntry("a", false) → persist: false (explicitly set)
+      // entryUnset → persist field omitted entirely
+      const entryUnset: PendingEntry = {
+        entry: { id: "b", path: "test.md", startLine: 0, endLine: 1, source: "test", snippet: "b", content: "b" },
+        text: "b",
+      };
+      queue.enqueue([makeEntry("a", false), entryUnset], "test");
       await vi.runAllTimersAsync();
 
       expect(persistFn).not.toHaveBeenCalled();
@@ -289,12 +299,11 @@ describe("EmbeddingQueue", () => {
       sm.getEntryCount.mockReturnValue(42);
       queue.attach(sm as any);
 
-      const count = await (async () => {
-        const p = queue.bootstrap([makeEntry("a"), makeEntry("b")]);
-        await vi.runAllTimersAsync();
-        return p;
-      })();
+      const p = queue.bootstrap([makeEntry("a"), makeEntry("b")]);
+      await vi.runAllTimersAsync();
+      const count = await p;
 
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
       expect(count).toBe(42);
     });
 

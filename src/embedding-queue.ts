@@ -16,6 +16,7 @@ export interface EmbeddingQueueLogger {
 
 export class EmbeddingQueue {
   private queue: QueuedEntry[] = [];
+  private inFlightIds = new Set<string>();
   private processing = false;
   private _bootstrapping = false;
   private stopped = false;
@@ -52,6 +53,7 @@ export class EmbeddingQueue {
     for (const entry of entries) {
       if (this.searchManager.hasEntry(entry.entry.id)) continue;
       if (queuedIds.has(entry.entry.id)) continue;
+      if (this.inFlightIds.has(entry.entry.id)) continue;
       this.queue.push(entry);
       queuedIds.add(entry.entry.id);
       added++;
@@ -82,9 +84,11 @@ export class EmbeddingQueue {
       while (this.queue.length > 0 && !this.stopped) {
         // Take a batch from the front of the queue
         const batch = this.queue.splice(0, Math.min(this.queue.length, 500));
+        for (const e of batch) this.inFlightIds.add(e.entry.id);
         this.log.info(`[queue] processing batch: ${batch.length} entries (${this.queue.length} remaining)`);
         try {
           await this.searchManager.addEntriesBatch(batch);
+          for (const e of batch) this.inFlightIds.delete(e.entry.id);
           if (this.stopped) break;
           // Persist plugin-originated entries (real-time, capture) to SQLite
           if (this.persistFn) {
@@ -93,6 +97,7 @@ export class EmbeddingQueue {
             }
           }
         } catch (err) {
+          for (const e of batch) this.inFlightIds.delete(e.entry.id);
           this.log.error(`[queue] batch failed: ${err instanceof Error ? err.message : err}`);
           if (this.stopped) break;
           // Re-queue entries that haven't exceeded retry limit
@@ -159,6 +164,7 @@ export class EmbeddingQueue {
       this.backoffResolve = null;
     }
     this.queue = [];
+    this.inFlightIds.clear();
     this.processing = false;
     this._bootstrapping = false;
     this.searchManager = null;
