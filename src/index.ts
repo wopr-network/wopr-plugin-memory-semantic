@@ -58,63 +58,23 @@ const embeddingQueue = new EmbeddingQueue({ info: console.info, error: console.e
 // Plugin Export
 // =============================================================================
 
-const plugin: WOPRPlugin & {
-  id: string;
-  search(query: string, maxResults?: number): Promise<MemorySearchResult[]>;
-  capture(text: string, source?: string): Promise<void>;
-  getConfig(): SemanticMemoryConfig;
-} = {
-  id: "memory-semantic",
-  name: "Semantic Memory",
+const plugin: WOPRPlugin = {
+  name: "wopr-plugin-memory-semantic",
   version: "1.0.0",
   description: "Semantic memory search with embeddings, auto-recall, and auto-capture",
   manifest: pluginManifest,
 
-  async search(query: string, maxResults?: number): Promise<MemorySearchResult[]> {
-    if (!state.searchManager) throw new Error("Semantic memory not initialized");
-    return state.searchManager.search(query, maxResults, state.instanceId);
-  },
-
-  async capture(text: string, source = "manual"): Promise<void> {
-    if (!state.searchManager) throw new Error("Semantic memory not initialized");
-    const id = `man-${contentHash(text)}`;
-    embeddingQueue.enqueue(
-      [
-        {
-          entry: {
-            id,
-            path: source,
-            startLine: 0,
-            endLine: 0,
-            source,
-            snippet: text.slice(0, 500),
-            content: text,
-            instanceId: state.instanceId,
-          },
-          text,
-          persist: true,
-        },
-      ],
-      "manual-capture",
-    );
-  },
-
-  getConfig(): SemanticMemoryConfig {
-    return { ...state.config };
-  },
-
   async init(api: WOPRPluginContext) {
     ctx = api as PluginContext;
-    const log = ctx.log;
-    embeddingQueue.setLogger(log);
-    log.info("[semantic-memory] init() called");
+    embeddingQueue.setLogger(ctx.log);
+    ctx.log.info("[semantic-memory] init() called");
 
     // Clean up previous registrations if re-initialized
     for (let i = cleanups.length - 1; i >= 0; i--) {
       try {
         cleanups[i]();
-      } catch (e) {
-        log.warn(`[semantic-memory] re-init cleanup[${i}] threw: ${e instanceof Error ? e.message : String(e)}`);
+      } catch {
+        /* ignore */
       }
     }
     cleanups.length = 0;
@@ -130,14 +90,10 @@ const plugin: WOPRPlugin & {
 
     // Read config from WOPR central config (set by onboard wizard)
     const storedConfig = ctx.getConfig?.() as Partial<SemanticMemoryConfig> | undefined;
-    await initialize(ctx, state, embeddingQueue, log, storedConfig);
-
-    // Capture any cleanup functions registered during initialize() (e.g. unsubSessionDestroy)
-    // before state.eventCleanup is replaced below.
-    cleanups.push(...state.eventCleanup);
+    await initialize(ctx, state, embeddingQueue, ctx.log, storedConfig);
 
     if (!state.initialized) {
-      log.error("[semantic-memory] Initialization failed — plugin will not activate");
+      ctx.log.error("[semantic-memory] Initialization failed — plugin will not activate");
       return;
     }
 
@@ -179,41 +135,40 @@ const plugin: WOPRPlugin & {
 
     // Register hooks via the event bus — store cleanup functions for shutdown
     const unsubBeforeInject = ctx.events.on("session:beforeInject", (payload: any) =>
-      handleBeforeInject(state, log, payload),
+      handleBeforeInject(state, ctx!.log, payload),
     );
     const unsubAfterInject = ctx.events.on("session:afterInject", (payload: any) =>
-      handleAfterInject(state, log, embeddingQueue, payload),
+      handleAfterInject(state, ctx!.log, embeddingQueue, payload),
     );
 
     // Subscribe to core's file change events for vector indexing
     const unsubFilesChanged = ctx.events.on("memory:filesChanged", (payload: any) =>
-      handleFilesChanged(state, log, embeddingQueue, payload),
+      handleFilesChanged(state, ctx!.log, embeddingQueue, payload),
     );
 
     // Hook into memory:search to provide semantic results
-    const unsubSearch = ctx.events.on("memory:search", (payload: any) => handleMemorySearch(state, log, payload));
+    const unsubSearch = ctx.events.on("memory:search", (payload: any) => handleMemorySearch(state, ctx!.log, payload));
 
     cleanups.push(unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch);
     state.eventCleanup = [unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch];
-    log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
+    ctx.log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 
   async shutdown() {
     if (!ctx) return; // Idempotent
-    const shutdownLog = ctx.log;
 
     // Stop the embedding queue first
     embeddingQueue.clear();
 
     // Stop file watcher
-    await stopWatcher(shutdownLog);
+    await stopWatcher(ctx.log);
 
     // Run all cleanup functions in reverse order (event unsubs, extension, context provider, configSchema)
     for (let i = cleanups.length - 1; i >= 0; i--) {
       try {
         cleanups[i]();
-      } catch (e) {
-        shutdownLog.warn(`[semantic-memory] cleanup[${i}] threw: ${e instanceof Error ? e.message : String(e)}`);
+      } catch {
+        /* ignore */
       }
     }
     cleanups.length = 0;
