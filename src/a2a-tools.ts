@@ -283,6 +283,12 @@ export function registerMemoryTools(
 
         const filePath = ROOT_FILES.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
         assertWithinBase(ROOT_FILES.includes(filename) ? sessionDir : memoryDir, filePath);
+
+        // Guard: reject symlinks at write target (closes TOCTOU window after assertWithinBase)
+        if (existsSync(filePath) && lstatSync(filePath).isSymbolicLink()) {
+          throw new PathTraversalError();
+        }
+
         const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
         if (shouldAppend && existsSync(filePath)) {
