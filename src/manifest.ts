@@ -33,6 +33,47 @@ export const pluginConfigSchema: ConfigSchema = {
       description: "Maximum byte size for memory_write content (default: 1048576 = 1 MB)",
       default: 1048576,
     },
+    {
+      name: "autoRecallEnabled",
+      type: "boolean",
+      label: "Auto-Recall Enabled",
+      description:
+        "Automatically inject relevant memories into conversation context (maps to autoRecall.enabled at runtime)",
+      default: true,
+    },
+    {
+      name: "autoCaptureEnabled",
+      type: "boolean",
+      label: "Auto-Capture Enabled",
+      description:
+        "Automatically extract and store memories from conversations (maps to autoCapture.enabled at runtime)",
+      default: true,
+    },
+    {
+      name: "instanceId",
+      type: "text",
+      label: "Instance ID",
+      description: "Unique identifier for multi-tenant memory isolation",
+      default: "default",
+    },
+    {
+      name: "searchMaxResults",
+      type: "number",
+      label: "Search Max Results",
+      description:
+        "Maximum number of results returned by semantic search (integer, 1–100, default: 10; non-integer values are rounded; maps to search.maxResults at runtime)",
+      default: 10,
+    },
+    {
+      name: "searchHybridWeight",
+      type: "number",
+      label: "Hybrid Search Vector Weight",
+      description:
+        "Weight of vector similarity vs text matching in hybrid search (0.0–1.0, default: 0.7; maps to search.hybridWeight at runtime)",
+      default: 0.7,
+      pattern: "^(0(\\.\\d+)?|1(\\.0*)?)$",
+      patternError: "Must be a number between 0.0 and 1.0",
+    },
   ],
 };
 
