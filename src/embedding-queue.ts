@@ -5,6 +5,8 @@ const BASE_BACKOFF_MS = 1000;
 
 export type PendingEntry = { entry: Omit<VectorEntry, "embedding">; text: string; persist?: boolean };
 
+type QueuedEntry = PendingEntry & { _retryCount?: number };
+
 export type PersistFn = (id: string) => void;
 
 export interface EmbeddingQueueLogger {
@@ -13,7 +15,7 @@ export interface EmbeddingQueueLogger {
 }
 
 export class EmbeddingQueue {
-  private queue: PendingEntry[] = [];
+  private queue: QueuedEntry[] = [];
   private processing = false;
   private _bootstrapping = false;
   private searchManager: SemanticSearchManager | null = null;
@@ -88,11 +90,11 @@ export class EmbeddingQueue {
         } catch (err) {
           this.log.error(`[queue] batch failed: ${err instanceof Error ? err.message : err}`);
           // Re-queue entries that haven't exceeded retry limit
-          const retriable: PendingEntry[] = [];
-          const dropped: PendingEntry[] = [];
+          const retriable: QueuedEntry[] = [];
+          const dropped: QueuedEntry[] = [];
           for (const entry of batch) {
-            const retryCount = ((entry as any)._retryCount ?? 0) + 1;
-            (entry as any)._retryCount = retryCount;
+            const retryCount = (entry._retryCount ?? 0) + 1;
+            entry._retryCount = retryCount;
             if (retryCount <= MAX_RETRIES) {
               retriable.push(entry);
             } else {
@@ -106,7 +108,7 @@ export class EmbeddingQueue {
           }
           if (retriable.length > 0) {
             this.queue.unshift(...retriable);
-            const maxRetry = Math.max(...retriable.map((e) => (e as any)._retryCount ?? 1));
+            const maxRetry = Math.max(...retriable.map((e) => e._retryCount ?? 1));
             const backoffMs = BASE_BACKOFF_MS * 2 ** (maxRetry - 1);
             this.log.info(`[queue] re-queued ${retriable.length} entries, backoff ${backoffMs}ms`);
             await new Promise((resolve) => setTimeout(resolve, backoffMs));
