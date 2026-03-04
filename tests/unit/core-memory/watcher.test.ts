@@ -52,6 +52,12 @@ describe("watcher - startWatcher when chokidar unavailable", () => {
     vi.resetModules();
   });
 
+  afterEach(async () => {
+    const { stopWatcher } = await import("../../../src/core-memory/watcher.js");
+    await stopWatcher(mockLogger()).catch(() => {});
+    vi.resetModules();
+  });
+
   it("startWatcher warns and leaves isWatching=false when chokidar fails", async () => {
     // chokidar is not installed in this test env; the dynamic import will fail
     const { startWatcher, isWatching } = await import("../../../src/core-memory/watcher.js");
@@ -105,6 +111,12 @@ describe("watcher - startWatcher called twice returns early", () => {
 });
 
 describe("watcher - WatcherCallback type", () => {
+  afterEach(async () => {
+    const { stopWatcher } = await import("../../../src/core-memory/watcher.js");
+    await stopWatcher(mockLogger()).catch(() => {});
+    vi.resetModules();
+  });
+
   it("accepts an async callback", async () => {
     vi.resetModules();
     const { startWatcher } = await import("../../../src/core-memory/watcher.js");
@@ -118,6 +130,5 @@ describe("watcher - WatcherCallback type", () => {
     await expect(
       startWatcher({ dirs: ["/workspace"], debounceMs: 50, onSync, log }),
     ).resolves.not.toThrow();
-    vi.resetModules();
   });
 });
