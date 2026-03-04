@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { registerMemoryTools } from "../../src/a2a-tools.js";
+import { registerMemoryTools, validateSessionName, PathTraversalError } from "../../src/a2a-tools.js";
 
 // Minimal mock context with registerTool
 function createMockCtx() {
@@ -169,7 +169,7 @@ describe("A2A tools path traversal protection", () => {
       expect(result.content[0].text).toContain("Invalid session name");
     });
 
-    it("rejects empty session name when passed directly to validateSessionName", async () => {
+    it("rejects empty session name via memory_read handler", async () => {
       // Note: handlers use `context.sessionName || "default"` so empty string
       // becomes "default" before reaching validateSessionName. Test via a name
       // that is explicitly invalid.
@@ -178,6 +178,13 @@ describe("A2A tools path traversal protection", () => {
       const result = await tool.handler({ file: "SELF.md" }, { sessionName: " " });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Invalid session name");
+    });
+
+    it("validateSessionName throws PathTraversalError directly", () => {
+      expect(() => validateSessionName(" ")).toThrow(PathTraversalError);
+      expect(() => validateSessionName("../escape")).toThrow(PathTraversalError);
+      expect(() => validateSessionName("con")).toThrow(PathTraversalError);
+      expect(() => validateSessionName("a".repeat(65))).toThrow(PathTraversalError);
     });
 
     it("rejects names with special characters", async () => {

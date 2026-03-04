@@ -41,7 +41,7 @@ const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
 export function validateSessionName(name: string): void {
   if (!SAFE_SESSION_NAME.test(name) || WINDOWS_RESERVED.test(name)) {
     throw new PathTraversalError(
-      `Invalid session name: "${name}". Must match ${SAFE_SESSION_NAME} and not be a Windows reserved name.`,
+      `Invalid session name. Must match ${SAFE_SESSION_NAME} and not be a Windows reserved name.`,
     );
   }
 }
