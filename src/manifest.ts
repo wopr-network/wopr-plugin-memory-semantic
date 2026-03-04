@@ -61,7 +61,7 @@ export const pluginConfigSchema: ConfigSchema = {
       type: "number",
       label: "Search Max Results",
       description:
-        "Maximum number of results returned by semantic search (1–100, default: 10; maps to search.maxResults at runtime)",
+        "Maximum number of results returned by semantic search (integer, 1–100, default: 10; non-integer values are rounded; maps to search.maxResults at runtime)",
       default: 10,
     },
     {
@@ -71,6 +71,8 @@ export const pluginConfigSchema: ConfigSchema = {
       description:
         "Weight of vector similarity vs text matching in hybrid search (0.0–1.0, default: 0.7; maps to search.hybridWeight at runtime)",
       default: 0.7,
+      pattern: "^(0(\\.\\d+)?|1(\\.0*)?)$",
+      patternError: "Must be a number between 0.0 and 1.0",
     },
   ],
 };
