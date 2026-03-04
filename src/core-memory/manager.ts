@@ -6,6 +6,7 @@ import path from "node:path";
 import type { PluginLogger, StorageApi, WOPREventBus } from "@wopr-network/plugin-types";
 import type { SessionApi } from "../types.js";
 import { buildFileEntry, chunkMarkdown, hashText, listMemoryFiles } from "./internal.js";
+import { runWithConcurrency } from "./run-with-concurrency.js";
 import { syncSessionFiles } from "./sync-sessions.js";
 import {
   DEFAULT_MEMORY_CONFIG,
@@ -595,31 +596,9 @@ export class MemoryIndexManager {
   }
 
   private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
-    const results: T[] = [];
-    const executing: Set<Promise<void>> = new Set();
-
-    for (const task of tasks) {
-      const p = task()
-        .then((result) => {
-          results.push(result);
-        })
-        .catch((err) => {
-          this.log.warn(
-            `[manager] runWithConcurrency task failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        })
-        .finally(() => {
-          executing.delete(p);
-        });
-      executing.add(p);
-
-      if (executing.size >= concurrency) {
-        await Promise.race(executing);
-      }
-    }
-
-    await Promise.all(executing);
-    return results;
+    return runWithConcurrency(tasks, concurrency, (err) => {
+      this.log.warn("[manager] runWithConcurrency task failed", err);
+    });
   }
 
   async status(): Promise<{

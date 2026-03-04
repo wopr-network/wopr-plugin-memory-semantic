@@ -1,34 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-async function runWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  concurrency: number,
-  onError?: (err: unknown) => void,
-): Promise<T[]> {
-  const results: T[] = [];
-  const executing: Set<Promise<void>> = new Set();
-
-  for (const task of tasks) {
-    const p = task()
-      .then((result) => {
-        results.push(result);
-      })
-      .catch((err) => {
-        if (onError) onError(err);
-      })
-      .finally(() => {
-        executing.delete(p);
-      });
-    executing.add(p);
-
-    if (executing.size >= concurrency) {
-      await Promise.race(executing);
-    }
-  }
-
-  await Promise.all(executing);
-  return results;
-}
+import { runWithConcurrency } from "../../src/core-memory/run-with-concurrency.js";
 
 describe("runWithConcurrency", () => {
   it("should continue processing tasks when one rejects", async () => {
@@ -94,5 +65,19 @@ describe("runWithConcurrency", () => {
       () => {},
     );
     expect(maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
+  it("should not throw when onError is not provided and a task rejects", async () => {
+    const results = await runWithConcurrency(
+      [
+        () => Promise.resolve("a"),
+        () => Promise.reject(new Error("fail")),
+        () => Promise.resolve("c"),
+      ],
+      2,
+    );
+    expect(results).toContain("a");
+    expect(results).toContain("c");
+    expect(results).toHaveLength(2);
   });
 });
