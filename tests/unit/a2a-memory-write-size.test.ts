@@ -64,7 +64,7 @@ describe("memory_write content size limit", () => {
   it("rejects multi-byte content exceeding 1 MB by byte count", async () => {
     // Each emoji is 4 bytes. 262_145 * 4 = 1_048_580 > 1_048_576
     const oversized = "\u{1F914}".repeat(262_145);
-    expect(Buffer.byteLength(oversized, "utf-8")).toBeGreaterThan(1_048_576);
+    expect(Buffer.byteLength(oversized, "utf-8")).toBeGreaterThan(MEMORY_WRITE_MAX_BYTES);
     const result = await ctx.tools.memory_write.handler(
       { file: "test.md", content: oversized },
       { sessionName: "default" },

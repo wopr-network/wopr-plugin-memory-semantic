@@ -22,6 +22,10 @@ export const MAX_SEARCH_RESULTS = 100;
 /** Maximum allowed byte length for memory_write content. */
 export const MEMORY_WRITE_MAX_BYTES = 1_048_576; // 1 MB
 
+/** Separator inserted between existing content and new content on append. */
+const MEMORY_APPEND_SEPARATOR = "\n\n";
+const MEMORY_APPEND_SEPARATOR_BYTES = Buffer.byteLength(MEMORY_APPEND_SEPARATOR, "utf-8");
+
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
   constructor(message = "Path outside allowed directory") {
@@ -346,7 +350,7 @@ export function registerMemoryTools(
 
         if (shouldAppend && existsSync(filePath)) {
           const existingBytes = lstatSync(filePath).size;
-          const combinedBytes = existingBytes + 2 + contentBytes;
+          const combinedBytes = existingBytes + MEMORY_APPEND_SEPARATOR_BYTES + contentBytes;
           if (combinedBytes > maxBytes) {
             return {
               content: [
@@ -358,8 +362,7 @@ export function registerMemoryTools(
               isError: true,
             };
           }
-          const existing = readFileSync(filePath, "utf-8");
-          writeFileSync(filePath, `${existing}\n\n${content}`);
+          writeFileSync(filePath, `${MEMORY_APPEND_SEPARATOR}${content}`, { flag: "a" });
         } else {
           writeFileSync(filePath, content);
         }
