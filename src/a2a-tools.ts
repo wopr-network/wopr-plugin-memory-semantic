@@ -21,8 +21,8 @@ export const MAX_SEARCH_RESULTS = 100;
 
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
-  constructor() {
-    super("Path outside allowed directory");
+  constructor(message = "Path outside allowed directory") {
+    super(message);
     this.name = "PathTraversalError";
   }
 }
@@ -40,8 +40,8 @@ const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
  */
 export function validateSessionName(name: string): void {
   if (!SAFE_SESSION_NAME.test(name) || WINDOWS_RESERVED.test(name)) {
-    throw new Error(
-      `Invalid session name: "${name}". Must match ${SAFE_SESSION_NAME} and not be a Windows reserved name.`,
+    throw new PathTraversalError(
+      `Invalid session name. Must match ${SAFE_SESSION_NAME} and not be a Windows reserved name.`,
     );
   }
 }
@@ -504,78 +504,85 @@ export function registerMemoryTools(
       },
     },
     handler: async (args: { reflection?: string; tattoo?: string; section?: string }, context: any) => {
-      const { reflection, tattoo, section } = args;
-      if (!reflection && !tattoo) {
-        return { content: [{ type: "text", text: "Provide 'reflection' or 'tattoo'" }], isError: true };
-      }
-
-      // Enforce content size limit to prevent disk exhaustion
-      if (reflection && Buffer.byteLength(reflection, "utf-8") > SELF_REFLECT_MAX_BYTES) {
-        return {
-          content: [
-            { type: "text", text: `reflection exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` },
-          ],
-          isError: true,
-        };
-      }
-      if (tattoo && Buffer.byteLength(tattoo, "utf-8") > SELF_REFLECT_MAX_BYTES) {
-        return {
-          content: [{ type: "text", text: `tattoo exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` }],
-          isError: true,
-        };
-      }
-      if (section && Buffer.byteLength(section, "utf-8") > SELF_REFLECT_SECTION_MAX_BYTES) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `section exceeds maximum allowed size of ${SELF_REFLECT_SECTION_MAX_BYTES} bytes`,
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
-      const memoryDir = join(sessionDir, "memory");
-      const selfPath = join(memoryDir, "SELF.md");
-
-      if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true });
-      if (!existsSync(selfPath)) writeFileSync(selfPath, "# SELF.md — Private Reflections\n\n");
-
-      const existing = readFileSync(selfPath, "utf-8");
-      const today = new Date().toISOString().split("T")[0];
-
-      if (tattoo) {
-        const lines = existing.split("\n");
-        const tattooSection = lines.findIndex((l: string) => l.includes("## Tattoos"));
-        if (tattooSection === -1) {
-          const titleLine = lines.findIndex((l: string) => l.startsWith("# "));
-          writeFileSync(
-            selfPath,
-            [...lines.slice(0, titleLine + 1), `\n## Tattoos\n\n- "${tattoo}"\n`, ...lines.slice(titleLine + 1)].join(
-              "\n",
-            ),
-          );
-        } else {
-          const beforeTattoo = lines.slice(0, tattooSection + 1);
-          const afterTattoo = lines.slice(tattooSection + 1);
-          const insertPoint = afterTattoo.findIndex((l: string) => l.startsWith("## "));
-          if (insertPoint === -1) afterTattoo.push(`- "${tattoo}"`);
-          else afterTattoo.splice(insertPoint, 0, `- "${tattoo}"`);
-          writeFileSync(selfPath, [...beforeTattoo, ...afterTattoo].join("\n"));
+      try {
+        const { reflection, tattoo, section } = args;
+        if (!reflection && !tattoo) {
+          return { content: [{ type: "text", text: "Provide 'reflection' or 'tattoo'" }], isError: true };
         }
-        return { content: [{ type: "text", text: `Tattoo added: "${tattoo}"` }] };
-      }
 
-      if (reflection) {
-        const sectionHeader = section || today;
-        writeFileSync(selfPath, `${existing}\n---\n\n## ${sectionHeader}\n\n${reflection}\n`);
-        return { content: [{ type: "text", text: `Reflection added under "${sectionHeader}"` }] };
-      }
+        // Enforce content size limit to prevent disk exhaustion
+        if (reflection && Buffer.byteLength(reflection, "utf-8") > SELF_REFLECT_MAX_BYTES) {
+          return {
+            content: [
+              { type: "text", text: `reflection exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` },
+            ],
+            isError: true,
+          };
+        }
+        if (tattoo && Buffer.byteLength(tattoo, "utf-8") > SELF_REFLECT_MAX_BYTES) {
+          return {
+            content: [{ type: "text", text: `tattoo exceeds maximum allowed size of ${SELF_REFLECT_MAX_BYTES} bytes` }],
+            isError: true,
+          };
+        }
+        if (section && Buffer.byteLength(section, "utf-8") > SELF_REFLECT_SECTION_MAX_BYTES) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `section exceeds maximum allowed size of ${SELF_REFLECT_SECTION_MAX_BYTES} bytes`,
+              },
+            ],
+            isError: true,
+          };
+        }
 
-      return { content: [{ type: "text", text: "Nothing to add" }] };
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
+        const memoryDir = join(sessionDir, "memory");
+        const selfPath = join(memoryDir, "SELF.md");
+
+        if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true });
+        if (!existsSync(selfPath)) writeFileSync(selfPath, "# SELF.md — Private Reflections\n\n");
+
+        const existing = readFileSync(selfPath, "utf-8");
+        const today = new Date().toISOString().split("T")[0];
+
+        if (tattoo) {
+          const lines = existing.split("\n");
+          const tattooSection = lines.findIndex((l: string) => l.includes("## Tattoos"));
+          if (tattooSection === -1) {
+            const titleLine = lines.findIndex((l: string) => l.startsWith("# "));
+            writeFileSync(
+              selfPath,
+              [...lines.slice(0, titleLine + 1), `\n## Tattoos\n\n- "${tattoo}"\n`, ...lines.slice(titleLine + 1)].join(
+                "\n",
+              ),
+            );
+          } else {
+            const beforeTattoo = lines.slice(0, tattooSection + 1);
+            const afterTattoo = lines.slice(tattooSection + 1);
+            const insertPoint = afterTattoo.findIndex((l: string) => l.startsWith("## "));
+            if (insertPoint === -1) afterTattoo.push(`- "${tattoo}"`);
+            else afterTattoo.splice(insertPoint, 0, `- "${tattoo}"`);
+            writeFileSync(selfPath, [...beforeTattoo, ...afterTattoo].join("\n"));
+          }
+          return { content: [{ type: "text", text: `Tattoo added: "${tattoo}"` }] };
+        }
+
+        if (reflection) {
+          const sectionHeader = section || today;
+          writeFileSync(selfPath, `${existing}\n---\n\n## ${sectionHeader}\n\n${reflection}\n`);
+          return { content: [{ type: "text", text: `Reflection added under "${sectionHeader}"` }] };
+        }
+
+        return { content: [{ type: "text", text: "Nothing to add" }] };
+      } catch (err) {
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
+        }
+        throw err;
+      }
     },
   });
 

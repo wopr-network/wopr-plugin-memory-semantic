@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { registerMemoryTools } from "../../src/a2a-tools.js";
+import { registerMemoryTools, validateSessionName, PathTraversalError } from "../../src/a2a-tools.js";
 
 // Minimal mock context with registerTool
 function createMockCtx() {
@@ -140,53 +140,81 @@ describe("A2A tools path traversal protection", () => {
     it("rejects path traversal in sessionName", async () => {
       const tool = ctx.tools["memory_read"];
       for (const name of ["../etc", "foo/../bar", "..\\windows"]) {
-        await expect(
-          tool.handler({ file: "SELF.md" }, { sessionName: name })
-        ).rejects.toThrow("Invalid session name");
+        const result = await tool.handler({ file: "SELF.md" }, { sessionName: name });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain("Invalid session name");
       }
     });
 
     it("rejects null bytes in sessionName", async () => {
       const tool = ctx.tools["memory_read"];
-      await expect(
-        tool.handler({ file: "SELF.md" }, { sessionName: "session\x00name" })
-      ).rejects.toThrow("Invalid session name");
+      const result = await tool.handler({ file: "SELF.md" }, { sessionName: "session\x00name" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid session name");
     });
 
     it("rejects Windows reserved names", async () => {
       const tool = ctx.tools["memory_read"];
       for (const name of ["con", "CON", "aux", "AUX", "nul", "NUL", "prn", "PRN", "com1", "COM9", "lpt1", "LPT3"]) {
-        await expect(
-          tool.handler({ file: "SELF.md" }, { sessionName: name })
-        ).rejects.toThrow("Invalid session name");
+        const result = await tool.handler({ file: "SELF.md" }, { sessionName: name });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain("Invalid session name");
       }
     });
 
     it("rejects names longer than 64 characters", async () => {
       const tool = ctx.tools["memory_read"];
-      await expect(
-        tool.handler({ file: "SELF.md" }, { sessionName: "a".repeat(65) })
-      ).rejects.toThrow("Invalid session name");
+      const result = await tool.handler({ file: "SELF.md" }, { sessionName: "a".repeat(65) });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid session name");
     });
 
-    it("rejects empty session name when passed directly to validateSessionName", async () => {
+    it("rejects empty session name via memory_read handler", async () => {
       // Note: handlers use `context.sessionName || "default"` so empty string
       // becomes "default" before reaching validateSessionName. Test via a name
       // that is explicitly invalid.
       const tool = ctx.tools["memory_read"];
       // Single char that's invalid — space — covers the empty/whitespace case
-      await expect(
-        tool.handler({ file: "SELF.md" }, { sessionName: " " })
-      ).rejects.toThrow("Invalid session name");
+      const result = await tool.handler({ file: "SELF.md" }, { sessionName: " " });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid session name");
+    });
+
+    it("validateSessionName throws PathTraversalError directly", () => {
+      expect(() => validateSessionName(" ")).toThrow(PathTraversalError);
+      expect(() => validateSessionName("../escape")).toThrow(PathTraversalError);
+      expect(() => validateSessionName("con")).toThrow(PathTraversalError);
+      expect(() => validateSessionName("a".repeat(65))).toThrow(PathTraversalError);
     });
 
     it("rejects names with special characters", async () => {
       const tool = ctx.tools["memory_read"];
       for (const name of ["foo bar", "foo/bar", "foo:bar", "foo*bar", "foo?bar", "foo<bar", "foo>bar", "foo|bar", "foo\"bar"]) {
-        await expect(
-          tool.handler({ file: "SELF.md" }, { sessionName: name })
-        ).rejects.toThrow("Invalid session name");
+        const result = await tool.handler({ file: "SELF.md" }, { sessionName: name });
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain("Invalid session name");
       }
+    });
+
+    it("rejects invalid sessionName in self_reflect and returns isError", async () => {
+      const tool = ctx.tools["self_reflect"];
+      const result = await tool.handler({ reflection: "test" }, { sessionName: "../escape" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid session name");
+    });
+
+    it("rejects invalid sessionName in memory_write and returns isError", async () => {
+      const tool = ctx.tools["memory_write"];
+      const result = await tool.handler({ file: "notes.md", content: "x" }, { sessionName: "../escape" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid session name");
+    });
+
+    it("rejects invalid sessionName in memory_get and returns isError", async () => {
+      const tool = ctx.tools["memory_get"];
+      const result = await tool.handler({ path: "memory/safe.md" }, { sessionName: "../escape" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Invalid session name");
     });
   });
 });
