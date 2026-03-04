@@ -152,4 +152,49 @@ describe("memory_write content size limit", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("exceeds maximum");
   });
+
+  it("rejects maxWriteBytes of 0", async () => {
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: "hello" },
+      { sessionName: "default", config: { maxWriteBytes: 0 } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
+  });
+
+  it("rejects negative maxWriteBytes", async () => {
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: "hello" },
+      { sessionName: "default", config: { maxWriteBytes: -1 } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
+  });
+
+  it("rejects Infinity as maxWriteBytes", async () => {
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: "hello" },
+      { sessionName: "default", config: { maxWriteBytes: Infinity } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
+  });
+
+  it("rejects NaN as maxWriteBytes", async () => {
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: "hello" },
+      { sessionName: "default", config: { maxWriteBytes: NaN } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
+  });
+
+  it("rejects string maxWriteBytes", async () => {
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: "hello" },
+      { sessionName: "default", config: { maxWriteBytes: "1048576" as any } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("maxWriteBytes must be a positive finite number");
+  });
 });
