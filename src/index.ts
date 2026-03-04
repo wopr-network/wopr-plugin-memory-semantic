@@ -10,10 +10,7 @@
  * - Auto-capture: extract and store important information from conversations
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import type { WOPRPlugin, WOPRPluginContext } from "@wopr-network/plugin-types";
-import winston from "winston";
 import { unregisterMemoryTools } from "./a2a-tools.js";
 import { stopWatcher } from "./core-memory/watcher.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
@@ -40,22 +37,6 @@ interface PluginContext extends WOPRPluginContext {
 let ctx: PluginContext | null = null;
 const cleanups: Array<() => void> = [];
 
-const logsDir = join(process.env.WOPR_HOME || "/tmp/wopr-test", "logs");
-try {
-  mkdirSync(logsDir, { recursive: true });
-} catch {}
-
-const log = winston.createLogger({
-  level: "debug",
-  format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
-  defaultMeta: { service: "semantic-memory" },
-  transports: [
-    new winston.transports.File({ filename: join(logsDir, "semantic-memory-error.log"), level: "error" }),
-    new winston.transports.File({ filename: join(logsDir, "semantic-memory.log"), level: "debug" }),
-    new winston.transports.Console({ level: "warn" }),
-  ],
-});
-
 // =============================================================================
 // Plugin State
 // =============================================================================
@@ -71,7 +52,7 @@ const state: PluginState = {
   instanceId: undefined,
 };
 
-const embeddingQueue = new EmbeddingQueue(log);
+const embeddingQueue = new EmbeddingQueue({ info: console.info, error: console.error });
 
 // =============================================================================
 // Plugin Export
@@ -85,14 +66,7 @@ const plugin: WOPRPlugin = {
 
   async init(api: WOPRPluginContext) {
     ctx = api as PluginContext;
-
-    // Override ctx.log to use our file-backed winston logger
-    ctx.log = {
-      info: (msg: string) => log.info(msg),
-      warn: (msg: string) => log.warn(msg),
-      error: (msg: string) => log.error(msg),
-      debug: (msg: string) => log.debug(msg),
-    };
+    embeddingQueue.setLogger(ctx.log);
     ctx.log.info("[semantic-memory] init() called");
 
     // Clean up previous registrations if re-initialized
@@ -116,7 +90,7 @@ const plugin: WOPRPlugin = {
 
     // Read config from WOPR central config (set by onboard wizard)
     const storedConfig = ctx.getConfig?.() as Partial<SemanticMemoryConfig> | undefined;
-    await initialize(ctx, state, embeddingQueue, log, storedConfig);
+    await initialize(ctx, state, embeddingQueue, ctx.log, storedConfig);
 
     if (!state.initialized) {
       ctx.log.error("[semantic-memory] Initialization failed — plugin will not activate");
@@ -161,15 +135,15 @@ const plugin: WOPRPlugin = {
 
     // Register hooks via the event bus — store cleanup functions for shutdown
     const unsubBeforeInject = ctx.events.on("session:beforeInject", (payload: any) =>
-      handleBeforeInject(state, log, payload),
+      handleBeforeInject(state, ctx!.log, payload),
     );
     const unsubAfterInject = ctx.events.on("session:afterInject", (payload: any) =>
-      handleAfterInject(state, log, embeddingQueue, payload),
+      handleAfterInject(state, ctx!.log, embeddingQueue, payload),
     );
 
     // Subscribe to core's file change events for vector indexing
     const unsubFilesChanged = ctx.events.on("memory:filesChanged", (payload: any) =>
-      handleFilesChanged(state, log, embeddingQueue, payload),
+      handleFilesChanged(state, ctx!.log, embeddingQueue, payload),
     );
 
     // Hook into memory:search to provide semantic results
