@@ -59,7 +59,7 @@ function makeSearchState(overrides: Record<string, any> = {}) {
 // handleFilesChanged
 // -------------------------------------------------------------------
 describe("handleFilesChanged", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it("returns early when state.initialized is false", async () => {
     const state = makeFilesChangedState({ initialized: false });
@@ -150,6 +150,53 @@ describe("handleFilesChanged", () => {
     expect(entries[0].text).toBe("This is a valid chunk with enough text");
   });
 
+  it("filters out invalid chunks across multiple changes, enqueuing only valid ones", async () => {
+    const state = makeFilesChangedState();
+    const queue = makeQueue();
+    await handleFilesChanged(state as any, makeLog(), queue as any, {
+      changes: [
+        // valid change with one valid and one too-short chunk
+        {
+          action: "update",
+          absPath: "/abs/a.ts",
+          source: "git",
+          chunks: [
+            { id: "valid-1", text: "This chunk is long enough to pass the filter", startLine: 0, endLine: 5 },
+            { id: "short-1", text: "tiny", startLine: 6, endLine: 6 },
+          ],
+        },
+        // delete action — all chunks skipped
+        {
+          action: "delete",
+          absPath: "/abs/b.ts",
+          chunks: [{ id: "del-1", text: "Would be valid but action is delete", startLine: 0, endLine: 2 }],
+        },
+        // change with no chunks at all
+        { action: "update", absPath: "/abs/c.ts" },
+        // change with a chunk that has no text
+        {
+          action: "update",
+          absPath: "/abs/d.ts",
+          chunks: [{ id: "notext-1", startLine: 0, endLine: 1 }],
+        },
+        // valid change with one valid chunk
+        {
+          action: "update",
+          absPath: "/abs/e.ts",
+          source: "editor",
+          chunks: [
+            { id: "valid-2", text: "Another chunk that is long enough to pass", startLine: 0, endLine: 3 },
+          ],
+        },
+      ],
+    });
+
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    const [entries] = queue.enqueue.mock.calls[0];
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e: any) => e.entry.id)).toEqual(["valid-1", "valid-2"]);
+  });
+
   it("falls back to change.path when absPath is missing", async () => {
     const state = makeFilesChangedState();
     const queue = makeQueue();
@@ -162,6 +209,7 @@ describe("handleFilesChanged", () => {
         },
       ],
     });
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
     const [entries] = queue.enqueue.mock.calls[0];
     expect(entries[0].entry.path).toBe("relative/bar.ts");
   });
@@ -178,13 +226,14 @@ describe("handleFilesChanged", () => {
         },
       ],
     });
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
     const [entries] = queue.enqueue.mock.calls[0];
     expect(entries[0].entry.source).toBe("memory");
   });
 
   it("uses multiScaleChunk when multi-scale is enabled", async () => {
     const state = makeFilesChangedState();
-    (state.config as any).chunking.multiScale = { enabled: true, scales: [{ chunkSize: 100, overlap: 20 }] };
+    (state.config as any).chunking.multiScale = { enabled: true, scales: [{ tokens: 100, overlap: 20 }] };
     const queue = makeQueue();
     vi.mocked(multiScaleChunk).mockReturnValue([
       { entry: { id: "ms-1", path: "p", startLine: 0, endLine: 0, source: "ms", snippet: "s", content: "c" }, text: "ms chunk" },
@@ -224,7 +273,7 @@ describe("handleFilesChanged", () => {
 // handleMemorySearch
 // -------------------------------------------------------------------
 describe("handleMemorySearch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it("logs the query on entry", async () => {
     const state = makeSearchState({ initialized: false });
