@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 
 // Mock the embeddings module so init() can run without a real embedding provider
@@ -86,6 +86,23 @@ function createStorageMock() {
 }
 
 describe("plugin lifecycle", () => {
+  beforeEach(async () => {
+    // Restore module-level mock defaults before each test so mutations in one
+    // test (e.g. mockRejectedValueOnce) don't bleed into subsequent tests
+    const { createEmbeddingProvider } = await import("../../src/embeddings.js");
+    vi.mocked(createEmbeddingProvider).mockResolvedValue({
+      id: "mock-provider",
+      dimensions: 4,
+      probe: vi.fn().mockResolvedValue(4),
+      embed: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3, 0.4]]),
+    } as any);
+  });
+
+  afterEach(() => {
+    // Clear call history and queued once-mocks between tests without wiping implementations
+    vi.clearAllMocks();
+  });
+
   it("should export required plugin interface fields", () => {
     expect(plugin.id).toBe("memory-semantic");
     expect(plugin.name).toBe("Semantic Memory");
