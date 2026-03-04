@@ -49,6 +49,12 @@ export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig
   };
 }
 
+/** Truncate error response bodies to prevent API key leakage in logs. */
+function sanitizeErrorPayload(body: string, maxLen = 200): string {
+  if (body.length <= maxLen) return body;
+  return `${body.slice(0, maxLen)}...[truncated]`;
+}
+
 // =============================================================================
 // Gemini Embeddings
 // =============================================================================
@@ -94,7 +100,7 @@ export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig
 
     if (!res.ok) {
       const payload = await res.text();
-      throw new Error(`Gemini embeddings failed: ${res.status} ${payload}`);
+      throw new Error(`Gemini embeddings failed: ${res.status} ${sanitizeErrorPayload(payload)}`);
     }
 
     const payload = (await res.json()) as { embedding?: { values?: number[] } };
@@ -120,7 +126,7 @@ export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig
 
     if (!res.ok) {
       const payload = await res.text();
-      throw new Error(`Gemini batch embeddings failed: ${res.status} ${payload}`);
+      throw new Error(`Gemini batch embeddings failed: ${res.status} ${sanitizeErrorPayload(payload)}`);
     }
 
     const payload = (await res.json()) as {
