@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createEmbeddingProvider, createOpenAiEmbeddingProvider, createGeminiEmbeddingProvider, sanitizeAndNormalizeEmbedding } from "../../src/embeddings.js";
+import { fallbackLogger } from "../../src/fallback-logger.js";
 import { DEFAULT_CONFIG, type SemanticMemoryConfig } from "../../src/types.js";
 
 function snapshotEnv(keys: string[]): () => void {
@@ -100,7 +101,7 @@ describe("createOpenAiEmbeddingProvider", () => {
   });
 
   it("should warn when apiKey comes from config instead of env var", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(fallbackLogger, "warn").mockImplementation(() => {});
     try {
       const provider = await createOpenAiEmbeddingProvider(
         makeConfig({ provider: "openai", apiKey: "sk-test-from-config" }),
@@ -136,7 +137,7 @@ describe("createGeminiEmbeddingProvider", () => {
   });
 
   it("should warn when apiKey comes from config instead of env var", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(fallbackLogger, "warn").mockImplementation(() => {});
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ embedding: { values: [1, 0] } }), { status: 200 }),
     );

@@ -12,8 +12,9 @@ import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
 // =============================================================================
 
 export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
-  if (config.apiKey) {
+  const configKey = config.apiKey?.trim();
+  const apiKey = configKey || process.env.OPENAI_API_KEY?.trim();
+  if (configKey) {
     log.warn(
       "API key loaded from plugin config (stored in SQLite). " +
         "For better security, set the OPENAI_API_KEY environment variable instead.",
@@ -57,8 +58,9 @@ const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1bet
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 
 export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
-  const apiKey = config.apiKey || process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
-  if (config.apiKey) {
+  const configKey = config.apiKey?.trim();
+  const apiKey = configKey || process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
+  if (configKey) {
     log.warn(
       "API key loaded from plugin config (stored in SQLite). " +
         "For better security, set the GOOGLE_API_KEY or GEMINI_API_KEY environment variable instead.",
