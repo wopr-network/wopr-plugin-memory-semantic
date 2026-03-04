@@ -29,12 +29,16 @@ function assertWithinBase(baseDir: string, filePath: string): void {
 
   const resolvedTarget = resolve(filePath);
 
-  // Reject symlinks that exist
-  if (existsSync(resolvedTarget)) {
+  // Reject symlinks — use lstatSync directly so broken symlinks are also caught
+  // (existsSync returns false for broken symlinks, skipping the check)
+  try {
     const stat = lstatSync(resolvedTarget);
     if (stat.isSymbolicLink()) {
       throw new PathTraversalError();
     }
+  } catch (e) {
+    if (e instanceof PathTraversalError) throw e;
+    // ENOENT = new file being created, not a symlink — OK
   }
 
   let targetReal: string;
