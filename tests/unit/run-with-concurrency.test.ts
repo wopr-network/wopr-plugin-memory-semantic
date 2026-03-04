@@ -115,6 +115,20 @@ describe("runWithConcurrency", () => {
     expect(results).toEqual(["slow", "fast", "medium"]);
   });
 
+  it("should preserve undefined results from successful tasks", async () => {
+    const { results, hadErrors } = await runWithConcurrency<string | undefined>(
+      [
+        () => Promise.resolve("a"),
+        () => Promise.resolve(undefined),
+        () => Promise.resolve("c"),
+      ],
+      3,
+    );
+    expect(hadErrors).toBe(false);
+    expect(results).toEqual(["a", undefined, "c"]);
+    expect(results).toHaveLength(3);
+  });
+
   it("should catch synchronous throws from tasks", async () => {
     const errors: unknown[] = [];
     const { results, hadErrors } = await runWithConcurrency(

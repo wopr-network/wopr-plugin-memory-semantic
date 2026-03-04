@@ -1,9 +1,11 @@
+const FAILED = Symbol("runWithConcurrency.failed");
+
 export async function runWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   concurrency: number,
   onError?: (err: unknown) => void,
 ): Promise<{ results: T[]; hadErrors: boolean }> {
-  const slots: (T | undefined)[] = new Array(tasks.length);
+  const slots: Array<T | typeof FAILED> = new Array(tasks.length).fill(FAILED);
   let hadErrors = false;
   const executing: Set<Promise<void>> = new Set();
 
@@ -29,6 +31,6 @@ export async function runWithConcurrency<T>(
   }
 
   await Promise.all(executing);
-  const results = slots.filter((v): v is T => v !== undefined);
+  const results = slots.filter((v): v is T => v !== FAILED);
   return { results, hadErrors };
 }
