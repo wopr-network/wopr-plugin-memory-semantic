@@ -71,6 +71,28 @@ describe("EmbeddingQueue", () => {
       expect(dropLogs.length).toBeGreaterThan(0);
     });
 
+    it("should not re-queue entries after clear() is called during retry backoff", async () => {
+      const log = makeLogger();
+      const queue = new EmbeddingQueue(log);
+      // Always fail so we reach the backoff await
+      const sm = makeSearchManager({ failCount: 999 });
+      queue.attach(sm as any);
+
+      queue.enqueue([makeEntry("race1")], "test");
+
+      // Let drain() run once (fails), then call clear() before the backoff resolves
+      await vi.advanceTimersByTimeAsync(0); // let drain start
+      queue.clear(); // shut down while backoff is pending
+
+      // Advance past the backoff — should NOT re-queue or access searchManager
+      await vi.runAllTimersAsync();
+
+      // After clear() the queue stays empty
+      expect((queue as any).queue.length).toBe(0);
+      // addEntriesBatch called only once (the initial failure), not again after clear
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
+    });
+
     it("should not lose entries on single transient failure during bootstrap", async () => {
       const log = makeLogger();
       const queue = new EmbeddingQueue(log);
