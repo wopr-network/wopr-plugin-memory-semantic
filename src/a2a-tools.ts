@@ -16,6 +16,9 @@ const SELF_REFLECT_MAX_BYTES = 65_536; // 64 KB
 /** Maximum allowed byte length for the self_reflect section header. */
 const SELF_REFLECT_SECTION_MAX_BYTES = 256;
 
+/** Upper bound for search results to prevent FTS5 full-scan DoS. */
+export const MAX_SEARCH_RESULTS = 100;
+
 /** Thrown when a path escapes its allowed base directory. */
 export class PathTraversalError extends Error {
   constructor() {
@@ -364,7 +367,8 @@ export function registerMemoryTools(
       args: { query: string; maxResults?: number; minScore?: number; temporal?: string },
       _context: any,
     ) => {
-      const { query, maxResults = 10, minScore = 0.35, temporal: temporalExpr } = args;
+      const { query, maxResults: rawMax = 10, minScore = 0.35, temporal: temporalExpr } = args;
+      const maxResults = Math.min(rawMax, MAX_SEARCH_RESULTS);
       const parsedTemporal = temporalExpr ? parseTemporalFilter(temporalExpr) : null;
       if (temporalExpr && !parsedTemporal) {
         return {
