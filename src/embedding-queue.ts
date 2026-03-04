@@ -18,6 +18,9 @@ export class EmbeddingQueue {
   private queue: QueuedEntry[] = [];
   private processing = false;
   private _bootstrapping = false;
+  private stopped = false;
+  private backoffTimer: ReturnType<typeof setTimeout> | null = null;
+  private backoffResolve: (() => void) | null = null;
   private searchManager: SemanticSearchManager | null = null;
   private persistFn: PersistFn | null = null;
   private log: EmbeddingQueueLogger;
@@ -35,6 +38,7 @@ export class EmbeddingQueue {
   }
 
   attach(sm: SemanticSearchManager, persistFn?: PersistFn): void {
+    this.stopped = false;
     this.searchManager = sm;
     this.persistFn = persistFn ?? null;
   }
@@ -75,12 +79,13 @@ export class EmbeddingQueue {
     this.processing = true;
 
     try {
-      while (this.queue.length > 0) {
+      while (this.queue.length > 0 && !this.stopped) {
         // Take a batch from the front of the queue
         const batch = this.queue.splice(0, Math.min(this.queue.length, 500));
         this.log.info(`[queue] processing batch: ${batch.length} entries (${this.queue.length} remaining)`);
         try {
           await this.searchManager.addEntriesBatch(batch);
+          if (this.stopped) break;
           // Persist plugin-originated entries (real-time, capture) to SQLite
           if (this.persistFn) {
             for (const entry of batch) {
@@ -89,6 +94,7 @@ export class EmbeddingQueue {
           }
         } catch (err) {
           this.log.error(`[queue] batch failed: ${err instanceof Error ? err.message : err}`);
+          if (this.stopped) break;
           // Re-queue entries that haven't exceeded retry limit
           const retriable: QueuedEntry[] = [];
           const dropped: QueuedEntry[] = [];
@@ -107,11 +113,20 @@ export class EmbeddingQueue {
             );
           }
           if (retriable.length > 0) {
-            this.queue.unshift(...retriable);
+            // Push to back of queue so new entries aren't starved by repeated failures
+            this.queue.push(...retriable);
             const maxRetry = Math.max(...retriable.map((e) => e._retryCount ?? 1));
             const backoffMs = BASE_BACKOFF_MS * 2 ** (maxRetry - 1);
             this.log.info(`[queue] re-queued ${retriable.length} entries, backoff ${backoffMs}ms`);
-            await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            await new Promise<void>((resolve) => {
+              this.backoffResolve = resolve;
+              this.backoffTimer = setTimeout(() => {
+                this.backoffTimer = null;
+                this.backoffResolve = null;
+                resolve();
+              }, backoffMs);
+            });
+            if (this.stopped) break;
           }
         }
       }
@@ -134,6 +149,15 @@ export class EmbeddingQueue {
   }
 
   clear(): void {
+    this.stopped = true;
+    if (this.backoffTimer !== null) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    if (this.backoffResolve !== null) {
+      this.backoffResolve();
+      this.backoffResolve = null;
+    }
     this.queue = [];
     this.processing = false;
     this._bootstrapping = false;

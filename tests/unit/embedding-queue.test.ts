@@ -85,5 +85,26 @@ describe("EmbeddingQueue", () => {
       expect(sm.addEntriesBatch).toHaveBeenCalledTimes(2);
       expect(count).toBe(1);
     });
+
+    it("should stop retrying when clear() is called during backoff", async () => {
+      const log = makeLogger();
+      const queue = new EmbeddingQueue(log);
+      const sm = makeSearchManager({ failCount: 999 }); // always fail
+      queue.attach(sm as any);
+
+      queue.enqueue([makeEntry("d")], "test");
+
+      // Flush microtasks so drain() reaches the backoff await after first failure
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
+
+      // Clear during the backoff — should cancel the timer and resolve the promise
+      queue.clear();
+
+      // Run any remaining timers; drain() should exit without retrying
+      await vi.runAllTimersAsync();
+
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
+    });
   });
 });
