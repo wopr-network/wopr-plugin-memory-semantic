@@ -77,11 +77,50 @@ const embeddingQueue = new EmbeddingQueue(log);
 // Plugin Export
 // =============================================================================
 
-const plugin: WOPRPlugin = {
-  name: "wopr-plugin-memory-semantic",
+const plugin: WOPRPlugin & {
+  id: string;
+  search(query: string, maxResults?: number): Promise<MemorySearchResult[]>;
+  capture(text: string, source?: string): Promise<void>;
+  getConfig(): SemanticMemoryConfig;
+} = {
+  id: "memory-semantic",
+  name: "Semantic Memory",
   version: "1.0.0",
   description: "Semantic memory search with embeddings, auto-recall, and auto-capture",
   manifest: pluginManifest,
+
+  async search(query: string, maxResults?: number): Promise<MemorySearchResult[]> {
+    if (!state.searchManager) throw new Error("Semantic memory not initialized");
+    return state.searchManager.search(query, maxResults, state.instanceId);
+  },
+
+  async capture(text: string, source = "manual"): Promise<void> {
+    if (!state.searchManager) throw new Error("Semantic memory not initialized");
+    const id = `man-${contentHash(text)}`;
+    embeddingQueue.enqueue(
+      [
+        {
+          entry: {
+            id,
+            path: source,
+            startLine: 0,
+            endLine: 0,
+            source,
+            snippet: text.slice(0, 500),
+            content: text,
+            instanceId: state.instanceId,
+          },
+          text,
+          persist: true,
+        },
+      ],
+      "manual-capture",
+    );
+  },
+
+  getConfig(): SemanticMemoryConfig {
+    return { ...state.config };
+  },
 
   async init(api: WOPRPluginContext) {
     ctx = api as PluginContext;
