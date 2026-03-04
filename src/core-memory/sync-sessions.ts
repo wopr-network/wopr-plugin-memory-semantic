@@ -13,7 +13,10 @@ export async function syncSessionFiles(params: {
   ftsAvailable: boolean;
   model: string;
   dirtyFiles: Set<string>;
-  runWithConcurrency: <T>(tasks: Array<() => Promise<T>>, concurrency: number) => Promise<T[]>;
+  runWithConcurrency: <T>(
+    tasks: Array<() => Promise<T>>,
+    concurrency: number,
+  ) => Promise<{ results: T[]; hadErrors: boolean }>;
   indexSessionFile: (entry: SessionFileEntry) => Promise<void>;
   concurrency: number;
   log: PluginLogger;

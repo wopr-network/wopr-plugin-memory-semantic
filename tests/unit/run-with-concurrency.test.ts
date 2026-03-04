@@ -3,7 +3,7 @@ import { runWithConcurrency } from "../../src/core-memory/run-with-concurrency.j
 
 describe("runWithConcurrency", () => {
   it("should continue processing tasks when one rejects", async () => {
-    const results = await runWithConcurrency(
+    const { results } = await runWithConcurrency(
       [
         () => Promise.resolve("a"),
         () => Promise.reject(new Error("fail")),
@@ -35,7 +35,7 @@ describe("runWithConcurrency", () => {
 
   it("should handle all tasks rejecting", async () => {
     const errors: unknown[] = [];
-    const results = await runWithConcurrency(
+    const { results } = await runWithConcurrency(
       [
         () => Promise.reject(new Error("e1")),
         () => Promise.reject(new Error("e2")),
@@ -68,7 +68,7 @@ describe("runWithConcurrency", () => {
   });
 
   it("should not throw when onError is not provided and a task rejects", async () => {
-    const results = await runWithConcurrency(
+    const { results } = await runWithConcurrency(
       [
         () => Promise.resolve("a"),
         () => Promise.reject(new Error("fail")),
@@ -79,5 +79,45 @@ describe("runWithConcurrency", () => {
     expect(results).toContain("a");
     expect(results).toContain("c");
     expect(results).toHaveLength(2);
+  });
+
+  it("should return hadErrors=true when a task rejects", async () => {
+    const { hadErrors } = await runWithConcurrency(
+      [
+        () => Promise.resolve("a"),
+        () => Promise.reject(new Error("fail")),
+        () => Promise.resolve("c"),
+      ],
+      2,
+      () => {},
+    );
+    expect(hadErrors).toBe(true);
+  });
+
+  it("should return hadErrors=false when all tasks succeed", async () => {
+    const { hadErrors } = await runWithConcurrency(
+      [() => Promise.resolve("a"), () => Promise.resolve("b")],
+      2,
+      () => {},
+    );
+    expect(hadErrors).toBe(false);
+  });
+
+  it("should catch synchronous throws from tasks", async () => {
+    const errors: unknown[] = [];
+    const { results, hadErrors } = await runWithConcurrency(
+      [
+        () => Promise.resolve("a"),
+        () => { throw new Error("sync throw"); },
+        () => Promise.resolve("c"),
+      ],
+      2,
+      (err) => errors.push(err),
+    );
+    expect(hadErrors).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("sync throw");
+    expect(results).toContain("a");
+    expect(results).toContain("c");
   });
 });
