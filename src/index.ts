@@ -157,6 +157,10 @@ const plugin: WOPRPlugin & {
     const storedConfig = ctx.getConfig?.() as Partial<SemanticMemoryConfig> | undefined;
     await initialize(ctx, state, embeddingQueue, log, storedConfig);
 
+    // Capture any cleanup functions registered during initialize() (e.g. unsubSessionDestroy)
+    // before state.eventCleanup is replaced below.
+    cleanups.push(...state.eventCleanup);
+
     if (!state.initialized) {
       ctx.log.error("[semantic-memory] Initialization failed — plugin will not activate");
       return;

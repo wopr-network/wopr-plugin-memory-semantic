@@ -132,6 +132,7 @@ export class MemoryIndexManager {
     loadError?: string;
   };
   private closed = false;
+  private unsubFilesChanged: (() => void) | undefined;
   private dirty = false;
   private syncing: Promise<void> | null = null;
 
@@ -178,7 +179,7 @@ export class MemoryIndexManager {
     this.fts = { enabled: true, available: true }; // FTS5 already created by plugin init
 
     // Subscribe FTS5 indexing as handler for memory:filesChanged
-    this.events.on("memory:filesChanged", (event) => {
+    this.unsubFilesChanged = this.events.on("memory:filesChanged", (event) => {
       return this.handleFilesChanged(event);
     });
 
@@ -638,6 +639,7 @@ export class MemoryIndexManager {
       return;
     }
     this.closed = true;
+    this.unsubFilesChanged?.();
     // Storage API connection is owned by the plugin context, not us
   }
 }
