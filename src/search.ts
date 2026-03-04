@@ -39,6 +39,7 @@ export type HybridVectorResult = {
   snippet: string;
   content: string; // Full indexed text for retrieval
   vectorScore: number;
+  instanceId?: string;
 };
 
 export type HybridKeywordResult = {
@@ -88,6 +89,7 @@ export function mergeHybridResults(params: {
       content: string;
       vectorScore: number;
       textScore: number;
+      instanceId?: string;
     }
   >();
 
@@ -102,6 +104,7 @@ export function mergeHybridResults(params: {
       content: r.content,
       vectorScore: r.vectorScore,
       textScore: 0,
+      instanceId: r.instanceId,
     });
   }
 
@@ -140,6 +143,7 @@ export function mergeHybridResults(params: {
       snippet: entry.snippet,
       content: entry.content,
       source: entry.source,
+      instanceId: entry.instanceId,
     };
   });
 
@@ -499,6 +503,7 @@ export async function createSemanticSearchManager(
         snippet: entry.snippet,
         content: entry.content,
         vectorScore: Math.max(0, Math.min(1, Number.isFinite(results.distances[i]) ? 1 - results.distances[i] : 0)),
+        instanceId: entry.instanceId,
       });
     }
 
@@ -526,6 +531,7 @@ export async function createSemanticSearchManager(
             snippet: r.snippet,
             content: r.content,
             source: r.source,
+            instanceId: r.instanceId,
           }));
       }
 
