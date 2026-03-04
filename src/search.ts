@@ -51,6 +51,7 @@ export type HybridKeywordResult = {
   snippet: string;
   content: string; // Full indexed text for retrieval
   textScore: number;
+  instanceId?: string;
 };
 
 export function buildFtsQuery(raw: string): string | null {
@@ -129,6 +130,7 @@ export function mergeHybridResults(params: {
         content: r.content,
         vectorScore: 0,
         textScore: r.textScore,
+        instanceId: r.instanceId,
       });
     }
   }
@@ -486,7 +488,19 @@ export async function createSemanticSearchManager(
     const scored: HybridVectorResult[] = [];
     for (let i = 0; i < results.keys.length; i++) {
       const rawKey = results.keys[i] as unknown;
-      const label = typeof rawKey === "bigint" ? rawKey : BigInt(rawKey as number);
+      let label: bigint | null = null;
+      if (typeof rawKey === "bigint") {
+        label = rawKey;
+      } else if (typeof rawKey === "number" && Number.isFinite(rawKey)) {
+        label = BigInt(Math.trunc(rawKey));
+      } else if (typeof rawKey === "string") {
+        try {
+          label = BigInt(rawKey);
+        } catch {
+          label = null;
+        }
+      }
+      if (label === null) continue;
       const entry = metadata.get(label);
       if (!entry) continue;
 
