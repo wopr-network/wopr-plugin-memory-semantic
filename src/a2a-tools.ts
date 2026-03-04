@@ -4,8 +4,8 @@
  * These tools provide memory operations for agents via MCP/A2A.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
@@ -18,11 +18,37 @@ export class PathTraversalError extends Error {
   }
 }
 
-/** Throw if filePath escapes baseDir. */
+/**
+ * Throw if filePath escapes baseDir.
+ * Uses realpathSync to resolve symlinks so symlink-based escapes are also caught.
+ * For not-yet-existing paths, resolves the parent directory then appends the filename.
+ */
 function assertWithinBase(baseDir: string, filePath: string): void {
   const resolvedBase = resolve(baseDir);
-  const resolvedPath = resolve(filePath);
-  if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + sep)) {
+  const baseReal = existsSync(resolvedBase) ? realpathSync(resolvedBase) : resolvedBase;
+
+  const resolvedTarget = resolve(filePath);
+
+  // Reject symlinks that exist
+  if (existsSync(resolvedTarget)) {
+    const stat = lstatSync(resolvedTarget);
+    if (stat.isSymbolicLink()) {
+      throw new PathTraversalError();
+    }
+  }
+
+  let targetReal: string;
+  if (existsSync(resolvedTarget)) {
+    targetReal = realpathSync(resolvedTarget);
+  } else {
+    // File doesn't exist yet — resolve the parent to catch symlinked parent dirs
+    const parentDir = resolve(resolvedTarget, "..");
+    const parentReal = existsSync(parentDir) ? realpathSync(parentDir) : parentDir;
+    const filename = resolvedTarget.split(sep).pop() ?? "";
+    targetReal = join(parentReal, filename);
+  }
+
+  if (targetReal !== baseReal && !targetReal.startsWith(baseReal + sep)) {
     throw new PathTraversalError();
   }
 }
@@ -33,7 +59,7 @@ function resolveMemoryFile(
   filename: string,
   globalMemoryDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
-  if (filename.startsWith(sep)) throw new PathTraversalError();
+  if (isAbsolute(filename)) throw new PathTraversalError();
   const globalPath = join(globalMemoryDir, filename);
   assertWithinBase(globalMemoryDir, globalPath);
   if (existsSync(globalPath)) {
@@ -52,7 +78,7 @@ function resolveRootFile(
   filename: string,
   globalIdentityDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
-  if (filename.startsWith(sep)) throw new PathTraversalError();
+  if (isAbsolute(filename)) throw new PathTraversalError();
   const globalPath = join(globalIdentityDir, filename);
   assertWithinBase(globalIdentityDir, globalPath);
   if (existsSync(globalPath)) {
@@ -99,8 +125,15 @@ export function registerMemoryTools(
   const GLOBAL_MEMORY_DIR = join(GLOBAL_IDENTITY_DIR, "memory");
   const SESSIONS_DIR = join(process.env.WOPR_HOME || "", "sessions");
 
-  // Helper to get session dir from context
-  const getSessionDir = (sessionName: string) => join(SESSIONS_DIR, sessionName);
+  // Helper to get session dir from context — validates sessionName cannot escape SESSIONS_DIR
+  const getSessionDir = (sessionName: string) => {
+    const dir = join(SESSIONS_DIR, sessionName);
+    assertWithinBase(SESSIONS_DIR, dir);
+    return dir;
+  };
+
+  // Files that live at the session root (not inside memory/)
+  const ROOT_FILES = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
 
   // Type assertion after guard check
   const api = ctx as typeof ctx & { registerTool: (tool: any) => void };
@@ -143,20 +176,29 @@ export function registerMemoryTools(
 
         if (file === "recent" || file === "daily") {
           const dailyFiles: { name: string; path: string }[] = [];
-          if (existsSync(GLOBAL_MEMORY_DIR)) {
-            for (const f of readdirSync(GLOBAL_MEMORY_DIR).filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))) {
-              dailyFiles.push({ name: f, path: join(GLOBAL_MEMORY_DIR, f) });
+          // Helper: collect date-named .md files from a base dir, skipping symlinks
+          const collectDailyFromDir = (baseDir: string, dest: typeof dailyFiles) => {
+            if (!existsSync(baseDir)) return;
+            for (const f of readdirSync(baseDir).filter((f: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))) {
+              const fullPath = join(baseDir, f);
+              try {
+                assertWithinBase(baseDir, fullPath);
+                const stat = lstatSync(fullPath);
+                if (stat.isSymbolicLink() || !stat.isFile()) continue;
+              } catch {
+                continue;
+              }
+              dest.push({ name: f, path: fullPath });
             }
-          }
+          };
+          collectDailyFromDir(GLOBAL_MEMORY_DIR, dailyFiles);
           const sessionMemoryDir = join(sessionDir, "memory");
-          if (existsSync(sessionMemoryDir)) {
-            readdirSync(sessionMemoryDir)
-              .filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
-              .forEach((f: string) => {
-                const idx = dailyFiles.findIndex((d) => d.name === f);
-                if (idx >= 0) dailyFiles[idx].path = join(sessionMemoryDir, f);
-                else dailyFiles.push({ name: f, path: join(sessionMemoryDir, f) });
-              });
+          const sessionDaily: typeof dailyFiles = [];
+          collectDailyFromDir(sessionMemoryDir, sessionDaily);
+          for (const entry of sessionDaily) {
+            const idx = dailyFiles.findIndex((d) => d.name === entry.name);
+            if (idx >= 0) dailyFiles[idx] = entry;
+            else dailyFiles.push(entry);
           }
           dailyFiles.sort((a, b) => a.name.localeCompare(b.name));
           const recent = dailyFiles.slice(-days);
@@ -170,9 +212,8 @@ export function registerMemoryTools(
           return { content: [{ type: "text", text: contents }] };
         }
 
-        const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
         let filePath: string;
-        if (rootFiles.includes(file)) {
+        if (ROOT_FILES.includes(file)) {
           const resolved = resolveRootFile(sessionDir, file, GLOBAL_IDENTITY_DIR);
           if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
           filePath = resolved.path;
@@ -240,9 +281,8 @@ export function registerMemoryTools(
         let filename = file;
         if (file === "today") filename = `${new Date().toISOString().split("T")[0]}.md`;
 
-        const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
-        const filePath = rootFiles.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
-        assertWithinBase(rootFiles.includes(filename) ? sessionDir : memoryDir, filePath);
+        const filePath = ROOT_FILES.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
+        assertWithinBase(ROOT_FILES.includes(filename) ? sessionDir : memoryDir, filePath);
         const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
         if (shouldAppend && existsSync(filePath)) {

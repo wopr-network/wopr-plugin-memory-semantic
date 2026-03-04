@@ -59,9 +59,12 @@ describe("A2A tools path traversal protection", () => {
       expect(result.content[0].text).toContain("Path outside allowed directory");
     });
 
-    it("rejects absolute path traversal (/etc/passwd)", async () => {
+    it("rejects absolute-path traversal in file parameter", async () => {
+      const absolutePath = process.platform === "win32"
+        ? "C:\\Windows\\system32\\drivers\\etc\\hosts"
+        : "/etc/passwd";
       const result = await ctx.tools.memory_read.handler(
-        { file: "/etc/passwd" },
+        { file: absolutePath },
         { sessionName: "default" },
       );
       expect(result.isError).toBe(true);
