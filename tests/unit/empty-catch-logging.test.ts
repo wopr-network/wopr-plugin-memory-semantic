@@ -39,7 +39,7 @@ describe("search.ts dims-read catch logging", () => {
       debugSpy.mockRestore();
       try { unlinkSync(mapPath); } catch { /* non-fatal: cleanup */ }
       try { unlinkSync(hnswPath); } catch { /* non-fatal: cleanup */ }
-      try { (await import("node:fs/promises")).rmdir(tmpDir); } catch { /* non-fatal: cleanup */ }
+      try { await (await import("node:fs/promises")).rm(tmpDir, { recursive: true, force: true }); } catch { /* non-fatal: cleanup */ }
     }
   });
 });

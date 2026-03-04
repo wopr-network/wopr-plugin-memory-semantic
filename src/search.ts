@@ -268,7 +268,7 @@ export async function createSemanticSearchManager(
         const saved = JSON.parse(readFileSync(initMapPath, "utf-8")) as HnswMapFile;
         if (saved.dims) savedDims = saved.dims;
       } catch (err) {
-        log.debug(`Failed to read saved HNSW map for dims: ${err instanceof Error ? err.message : err}`);
+        log.debug("Failed to read saved HNSW map for dims", err);
       }
     }
 
