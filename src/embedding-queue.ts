@@ -166,7 +166,12 @@ export class EmbeddingQueue {
     }
     // Wait for any in-flight drain to finish (it will exit because stopped=true)
     if (this.drainPromise) {
-      await this.drainPromise.catch(() => {});
+      await Promise.race([
+        this.drainPromise.catch((err) => {
+          this.log.error(`[queue] drain error during clear: ${err instanceof Error ? err.message : err}`);
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
       this.drainPromise = null;
     }
     this.queue = [];
