@@ -4,11 +4,54 @@
  * These tools provide memory operations for agents via MCP/A2A.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
+
+/** Thrown when a path escapes its allowed base directory. */
+export class PathTraversalError extends Error {
+  constructor() {
+    super("Path outside allowed directory");
+    this.name = "PathTraversalError";
+  }
+}
+
+/**
+ * Throw if filePath escapes baseDir.
+ * Uses realpathSync to resolve symlinks so symlink-based escapes are also caught.
+ * For not-yet-existing paths, resolves the parent directory then appends the filename.
+ */
+function assertWithinBase(baseDir: string, filePath: string): void {
+  const resolvedBase = resolve(baseDir);
+  const baseReal = existsSync(resolvedBase) ? realpathSync(resolvedBase) : resolvedBase;
+
+  const resolvedTarget = resolve(filePath);
+
+  // Reject symlinks that exist
+  if (existsSync(resolvedTarget)) {
+    const stat = lstatSync(resolvedTarget);
+    if (stat.isSymbolicLink()) {
+      throw new PathTraversalError();
+    }
+  }
+
+  let targetReal: string;
+  if (existsSync(resolvedTarget)) {
+    targetReal = realpathSync(resolvedTarget);
+  } else {
+    // File doesn't exist yet — resolve the parent to catch symlinked parent dirs
+    const parentDir = resolve(resolvedTarget, "..");
+    const parentReal = existsSync(parentDir) ? realpathSync(parentDir) : parentDir;
+    const filename = resolvedTarget.split(sep).pop() ?? "";
+    targetReal = join(parentReal, filename);
+  }
+
+  if (targetReal !== baseReal && !targetReal.startsWith(baseReal + sep)) {
+    throw new PathTraversalError();
+  }
+}
 
 // Helper to resolve memory files
 function resolveMemoryFile(
@@ -16,11 +59,14 @@ function resolveMemoryFile(
   filename: string,
   globalMemoryDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
+  if (isAbsolute(filename)) throw new PathTraversalError();
   const globalPath = join(globalMemoryDir, filename);
+  assertWithinBase(globalMemoryDir, globalPath);
   if (existsSync(globalPath)) {
     return { path: globalPath, exists: true, isGlobal: true };
   }
   const sessionPath = join(sessionDir, "memory", filename);
+  assertWithinBase(join(sessionDir, "memory"), sessionPath);
   if (existsSync(sessionPath)) {
     return { path: sessionPath, exists: true, isGlobal: false };
   }
@@ -32,11 +78,14 @@ function resolveRootFile(
   filename: string,
   globalIdentityDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
+  if (isAbsolute(filename)) throw new PathTraversalError();
   const globalPath = join(globalIdentityDir, filename);
+  assertWithinBase(globalIdentityDir, globalPath);
   if (existsSync(globalPath)) {
     return { path: globalPath, exists: true, isGlobal: true };
   }
   const sessionPath = join(sessionDir, filename);
+  assertWithinBase(sessionDir, sessionPath);
   if (existsSync(sessionPath)) {
     return { path: sessionPath, exists: true, isGlobal: false };
   }
@@ -76,8 +125,15 @@ export function registerMemoryTools(
   const GLOBAL_MEMORY_DIR = join(GLOBAL_IDENTITY_DIR, "memory");
   const SESSIONS_DIR = join(process.env.WOPR_HOME || "", "sessions");
 
-  // Helper to get session dir from context
-  const getSessionDir = (sessionName: string) => join(SESSIONS_DIR, sessionName);
+  // Helper to get session dir from context — validates sessionName cannot escape SESSIONS_DIR
+  const getSessionDir = (sessionName: string) => {
+    const dir = join(SESSIONS_DIR, sessionName);
+    assertWithinBase(SESSIONS_DIR, dir);
+    return dir;
+  };
+
+  // Files that live at the session root (not inside memory/)
+  const ROOT_FILES = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
 
   // Type assertion after guard check
   const api = ctx as typeof ctx & { registerTool: (tool: any) => void };
@@ -97,92 +153,107 @@ export function registerMemoryTools(
       },
     },
     handler: async (args: { file?: string; from?: number; lines?: number; days?: number }, context: any) => {
-      const { file, days = 7, from, lines: lineCount } = args;
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
+      try {
+        const { file, days = 7, from, lines: lineCount } = args;
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
 
-      if (!file) {
-        const files: string[] = listAllMemoryFiles(sessionDir, GLOBAL_MEMORY_DIR);
-        for (const f of ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md"]) {
-          const resolved = resolveRootFile(sessionDir, f, GLOBAL_IDENTITY_DIR);
-          if (resolved.exists && !files.includes(f)) files.push(f);
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: files.length > 0 ? `Available memory files:\n${files.join("\n")}` : "No memory files found.",
-            },
-          ],
-        };
-      }
-
-      if (file === "recent" || file === "daily") {
-        const dailyFiles: { name: string; path: string }[] = [];
-        if (existsSync(GLOBAL_MEMORY_DIR)) {
-          for (const f of readdirSync(GLOBAL_MEMORY_DIR).filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))) {
-            dailyFiles.push({ name: f, path: join(GLOBAL_MEMORY_DIR, f) });
+        if (!file) {
+          const files: string[] = listAllMemoryFiles(sessionDir, GLOBAL_MEMORY_DIR);
+          for (const f of ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md"]) {
+            const resolved = resolveRootFile(sessionDir, f, GLOBAL_IDENTITY_DIR);
+            if (resolved.exists && !files.includes(f)) files.push(f);
           }
+          return {
+            content: [
+              {
+                type: "text",
+                text: files.length > 0 ? `Available memory files:\n${files.join("\n")}` : "No memory files found.",
+              },
+            ],
+          };
         }
-        const sessionMemoryDir = join(sessionDir, "memory");
-        if (existsSync(sessionMemoryDir)) {
-          readdirSync(sessionMemoryDir)
-            .filter((f: string) => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
-            .forEach((f: string) => {
-              const idx = dailyFiles.findIndex((d) => d.name === f);
-              if (idx >= 0) dailyFiles[idx].path = join(sessionMemoryDir, f);
-              else dailyFiles.push({ name: f, path: join(sessionMemoryDir, f) });
-            });
+
+        if (file === "recent" || file === "daily") {
+          const dailyFiles: { name: string; path: string }[] = [];
+          // Helper: collect date-named .md files from a base dir, skipping symlinks
+          const collectDailyFromDir = (baseDir: string, dest: typeof dailyFiles) => {
+            if (!existsSync(baseDir)) return;
+            for (const f of readdirSync(baseDir).filter((f: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))) {
+              const fullPath = join(baseDir, f);
+              try {
+                assertWithinBase(baseDir, fullPath);
+                const stat = lstatSync(fullPath);
+                if (stat.isSymbolicLink() || !stat.isFile()) continue;
+              } catch {
+                continue;
+              }
+              dest.push({ name: f, path: fullPath });
+            }
+          };
+          collectDailyFromDir(GLOBAL_MEMORY_DIR, dailyFiles);
+          const sessionMemoryDir = join(sessionDir, "memory");
+          const sessionDaily: typeof dailyFiles = [];
+          collectDailyFromDir(sessionMemoryDir, sessionDaily);
+          for (const entry of sessionDaily) {
+            const idx = dailyFiles.findIndex((d) => d.name === entry.name);
+            if (idx >= 0) dailyFiles[idx] = entry;
+            else dailyFiles.push(entry);
+          }
+          dailyFiles.sort((a, b) => a.name.localeCompare(b.name));
+          const recent = dailyFiles.slice(-days);
+          if (recent.length === 0) return { content: [{ type: "text", text: "No daily memory files yet." }] };
+          const contents = recent
+            .map(({ name, path }) => {
+              const content = readFileSync(path, "utf-8");
+              return `## ${name.replace(".md", "")}\n\n${content}`;
+            })
+            .join("\n\n---\n\n");
+          return { content: [{ type: "text", text: contents }] };
         }
-        dailyFiles.sort((a, b) => a.name.localeCompare(b.name));
-        const recent = dailyFiles.slice(-days);
-        if (recent.length === 0) return { content: [{ type: "text", text: "No daily memory files yet." }] };
-        const contents = recent
-          .map(({ name, path }) => {
-            const content = readFileSync(path, "utf-8");
-            return `## ${name.replace(".md", "")}\n\n${content}`;
-          })
-          .join("\n\n---\n\n");
-        return { content: [{ type: "text", text: contents }] };
-      }
 
-      const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
-      let filePath: string;
-      if (rootFiles.includes(file)) {
-        const resolved = resolveRootFile(sessionDir, file, GLOBAL_IDENTITY_DIR);
-        if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
-        filePath = resolved.path;
-      } else {
-        const resolved = resolveMemoryFile(sessionDir, file, GLOBAL_MEMORY_DIR);
-        if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
-        filePath = resolved.path;
-      }
+        let filePath: string;
+        if (ROOT_FILES.includes(file)) {
+          const resolved = resolveRootFile(sessionDir, file, GLOBAL_IDENTITY_DIR);
+          if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
+          filePath = resolved.path;
+        } else {
+          const resolved = resolveMemoryFile(sessionDir, file, GLOBAL_MEMORY_DIR);
+          if (!resolved.exists) return { content: [{ type: "text", text: `File not found: ${file}` }], isError: true };
+          filePath = resolved.path;
+        }
 
-      const content = readFileSync(filePath, "utf-8");
-      if (from !== undefined && from > 0) {
-        const allLines = content.split("\n");
-        const startIdx = Math.max(0, from - 1);
-        const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  path: file,
-                  from: startIdx + 1,
-                  to: endIdx,
-                  totalLines: allLines.length,
-                  text: allLines.slice(startIdx, endIdx).join("\n"),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        const content = readFileSync(filePath, "utf-8");
+        if (from !== undefined && from > 0) {
+          const allLines = content.split("\n");
+          const startIdx = Math.max(0, from - 1);
+          const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    path: file,
+                    from: startIdx + 1,
+                    to: endIdx,
+                    totalLines: allLines.length,
+                    text: allLines.slice(startIdx, endIdx).join("\n"),
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+        return { content: [{ type: "text", text: content }] };
+      } catch (err) {
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
+        }
+        throw err;
       }
-      return { content: [{ type: "text", text: content }] };
     },
   });
 
@@ -200,27 +271,34 @@ export function registerMemoryTools(
       required: ["file", "content"],
     },
     handler: async (args: { file: string; content: string; append?: boolean }, context: any) => {
-      const { file, content, append } = args;
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
-      const memoryDir = join(sessionDir, "memory");
-      if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true });
+      try {
+        const { file, content, append } = args;
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
+        const memoryDir = join(sessionDir, "memory");
+        if (!existsSync(memoryDir)) mkdirSync(memoryDir, { recursive: true });
 
-      let filename = file;
-      if (file === "today") filename = `${new Date().toISOString().split("T")[0]}.md`;
+        let filename = file;
+        if (file === "today") filename = `${new Date().toISOString().split("T")[0]}.md`;
 
-      const rootFiles = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "AGENTS.md"];
-      const filePath = rootFiles.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
-      const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
+        const filePath = ROOT_FILES.includes(filename) ? join(sessionDir, filename) : join(memoryDir, filename);
+        assertWithinBase(ROOT_FILES.includes(filename) ? sessionDir : memoryDir, filePath);
+        const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
-      if (shouldAppend && existsSync(filePath)) {
-        const existing = readFileSync(filePath, "utf-8");
-        writeFileSync(filePath, `${existing}\n\n${content}`);
-      } else {
-        writeFileSync(filePath, content);
+        if (shouldAppend && existsSync(filePath)) {
+          const existing = readFileSync(filePath, "utf-8");
+          writeFileSync(filePath, `${existing}\n\n${content}`);
+        } else {
+          writeFileSync(filePath, content);
+        }
+
+        return { content: [{ type: "text", text: `${shouldAppend ? "Appended to" : "Wrote"} ${filename}` }] };
+      } catch (err) {
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
+        }
+        throw err;
       }
-
-      return { content: [{ type: "text", text: `${shouldAppend ? "Appended to" : "Wrote"} ${filename}` }] };
     },
   });
 
@@ -305,50 +383,61 @@ export function registerMemoryTools(
       required: ["path"],
     },
     handler: async (args: { path: string; from?: number; lines?: number }, context: any) => {
-      const { path: relPath, from, lines: lineCount } = args;
-      const sessionName = context.sessionName || "default";
-      const sessionDir = getSessionDir(sessionName);
-      const memoryDir = join(sessionDir, "memory");
+      try {
+        const { path: relPath, from, lines: lineCount } = args;
+        const sessionName = context.sessionName || "default";
+        const sessionDir = getSessionDir(sessionName);
+        const memoryDir = join(sessionDir, "memory");
 
-      let filePath = join(sessionDir, relPath);
-      if (!existsSync(filePath)) filePath = join(memoryDir, relPath);
-      if (!existsSync(filePath))
-        return { content: [{ type: "text", text: `File not found: ${relPath}` }], isError: true };
+        let filePath = join(sessionDir, relPath);
+        assertWithinBase(sessionDir, filePath);
+        if (!existsSync(filePath)) {
+          filePath = join(memoryDir, relPath);
+          assertWithinBase(memoryDir, filePath);
+        }
+        if (!existsSync(filePath))
+          return { content: [{ type: "text", text: `File not found: ${relPath}` }], isError: true };
 
-      const content = readFileSync(filePath, "utf-8");
-      const allLines = content.split("\n");
+        const content = readFileSync(filePath, "utf-8");
+        const allLines = content.split("\n");
 
-      if (from !== undefined && from > 0) {
-        const startIdx = Math.max(0, from - 1);
-        const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
+        if (from !== undefined && from > 0) {
+          const startIdx = Math.max(0, from - 1);
+          const endIdx = lineCount !== undefined ? Math.min(allLines.length, startIdx + lineCount) : allLines.length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    path: relPath,
+                    from: startIdx + 1,
+                    to: endIdx,
+                    totalLines: allLines.length,
+                    text: allLines.slice(startIdx, endIdx).join("\n"),
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(
-                {
-                  path: relPath,
-                  from: startIdx + 1,
-                  to: endIdx,
-                  totalLines: allLines.length,
-                  text: allLines.slice(startIdx, endIdx).join("\n"),
-                },
-                null,
-                2,
-              ),
+              text: JSON.stringify({ path: relPath, totalLines: allLines.length, text: content }, null, 2),
             },
           ],
         };
+      } catch (err) {
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
+        }
+        throw err;
       }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ path: relPath, totalLines: allLines.length, text: content }, null, 2),
-          },
-        ],
-      };
     },
   });
 
