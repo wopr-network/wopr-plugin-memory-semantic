@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { registerMemoryTools } from "../../src/a2a-tools.js";
+import { registerMemoryTools, MEMORY_WRITE_MAX_BYTES } from "../../src/a2a-tools.js";
 
 function createMockCtx() {
   const tools: Record<string, any> = {};
@@ -42,7 +42,7 @@ describe("memory_write content size limit", () => {
   });
 
   it("rejects content exceeding 1 MB", async () => {
-    const oversized = "x".repeat(1_048_577); // 1 byte over
+    const oversized = "x".repeat(MEMORY_WRITE_MAX_BYTES + 1); // 1 byte over
     const result = await ctx.tools.memory_write.handler(
       { file: "test.md", content: oversized },
       { sessionName: "default" },
@@ -52,7 +52,7 @@ describe("memory_write content size limit", () => {
   });
 
   it("accepts content exactly at 1 MB", async () => {
-    const ok = "x".repeat(1_048_576);
+    const ok = "x".repeat(MEMORY_WRITE_MAX_BYTES);
     const result = await ctx.tools.memory_write.handler(
       { file: "test.md", content: ok },
       { sessionName: "default" },
@@ -107,10 +107,47 @@ describe("memory_write content size limit", () => {
     const memoryDir = join(tmpBase, "sessions", "default", "memory");
     writeFileSync(join(memoryDir, "small.md"), "tiny");
 
-    const oversized = "x".repeat(1_048_577);
+    const oversized = "x".repeat(MEMORY_WRITE_MAX_BYTES + 1);
     const result = await ctx.tools.memory_write.handler(
       { file: "small.md", content: oversized },
       { sessionName: "default" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("exceeds maximum");
+  });
+
+  it("uses config.maxWriteBytes when set, rejecting content exceeding it", async () => {
+    const customMax = 512;
+    const oversized = "x".repeat(513);
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: oversized },
+      { sessionName: "default", config: { maxWriteBytes: customMax } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("exceeds maximum");
+    expect(result.content[0].text).toContain("512");
+  });
+
+  it("uses config.maxWriteBytes when set, accepting content within it", async () => {
+    const customMax = 512;
+    const ok = "x".repeat(512);
+    const result = await ctx.tools.memory_write.handler(
+      { file: "test.md", content: ok },
+      { sessionName: "default", config: { maxWriteBytes: customMax } },
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("Wrote");
+  });
+
+  it("config.maxWriteBytes overrides default for append path", async () => {
+    const customMax = 1000;
+    const memoryDir = join(tmpBase, "sessions", "default", "memory");
+    writeFileSync(join(memoryDir, "capped.md"), "x".repeat(800));
+
+    const appendContent = "z".repeat(300); // 800 + 2 + 300 = 1102 > 1000
+    const result = await ctx.tools.memory_write.handler(
+      { file: "capped.md", content: appendContent, append: true },
+      { sessionName: "default", config: { maxWriteBytes: customMax } },
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("exceeds maximum");

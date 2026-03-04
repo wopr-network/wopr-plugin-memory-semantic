@@ -307,7 +307,7 @@ export function registerMemoryTools(
         const { file, content, append } = args;
 
         // Enforce content size limit to prevent disk exhaustion
-        const maxBytes = MEMORY_WRITE_MAX_BYTES;
+        const maxBytes = context.config?.maxWriteBytes ?? MEMORY_WRITE_MAX_BYTES;
         const contentBytes = Buffer.byteLength(content, "utf-8");
         if (contentBytes > maxBytes) {
           return {
@@ -345,8 +345,8 @@ export function registerMemoryTools(
         const shouldAppend = append !== undefined ? append : filename.match(/^\d{4}-\d{2}-\d{2}\.md$/);
 
         if (shouldAppend && existsSync(filePath)) {
-          const existing = readFileSync(filePath, "utf-8");
-          const combinedBytes = Buffer.byteLength(existing, "utf-8") + 2 + contentBytes;
+          const existingBytes = lstatSync(filePath).size;
+          const combinedBytes = existingBytes + 2 + contentBytes;
           if (combinedBytes > maxBytes) {
             return {
               content: [
@@ -358,6 +358,7 @@ export function registerMemoryTools(
               isError: true,
             };
           }
+          const existing = readFileSync(filePath, "utf-8");
           writeFileSync(filePath, `${existing}\n\n${content}`);
         } else {
           writeFileSync(filePath, content);
