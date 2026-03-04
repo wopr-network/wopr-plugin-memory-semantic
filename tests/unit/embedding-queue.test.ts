@@ -388,5 +388,32 @@ describe("EmbeddingQueue", () => {
       // No crash — verify clear worked
       expect(log.error.mock.calls.filter((c: string[]) => c[0].includes("crash"))).toHaveLength(0);
     });
+
+    it("should resolve via timeout when drainPromise never settles", async () => {
+      const log = makeLogger();
+      const queue = new EmbeddingQueue(log);
+      const sm = makeSearchManager();
+
+      // Make addEntriesBatch hang forever (never resolves or rejects)
+      sm.addEntriesBatch.mockImplementationOnce(() => new Promise<number>(() => {}));
+
+      queue.attach(sm as any);
+      queue.enqueue([makeEntry("a")], "test");
+
+      // Let drain() start and get stuck in addEntriesBatch
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
+
+      // clear() — should resolve after the 5000ms timeout, not hang forever
+      const clearPromise = queue.clear();
+
+      // Advance past the 5000ms drain timeout in clear()
+      await vi.advanceTimersByTimeAsync(5001);
+
+      await clearPromise;
+
+      // Queue should be fully reset
+      expect(queue.bootstrapping).toBe(false);
+    });
   });
 });

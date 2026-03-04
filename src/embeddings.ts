@@ -89,6 +89,7 @@ export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig
         content: { parts: [{ text }] },
         taskType: "RETRIEVAL_QUERY",
       }),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) {
@@ -114,6 +115,7 @@ export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig
       method: "POST",
       headers,
       body: JSON.stringify({ requests }),
+      signal: AbortSignal.timeout(120_000),
     });
 
     if (!res.ok) {
