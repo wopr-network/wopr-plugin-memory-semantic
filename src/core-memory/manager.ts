@@ -110,9 +110,13 @@ export async function discoverSessionMemoryDirs(sessionsBase: string): Promise<s
       try {
         const stat = await fs.stat(memDir);
         if (stat.isDirectory()) dirs.push(sessionDir);
-      } catch {}
+      } catch {
+        /* non-fatal: session directory may lack memory subfolder */
+      }
     }
-  } catch {}
+  } catch {
+    /* non-fatal: sessions directory may not exist yet */
+  }
   return dirs;
 }
 

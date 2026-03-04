@@ -245,10 +245,14 @@ export async function createSemanticSearchManager(
       log.warn(`Failed to save HNSW index: ${err instanceof Error ? err.message : err}`);
       try {
         unlinkSync(tmpMapPath);
-      } catch {}
+      } catch {
+        /* non-fatal: best-effort cleanup of temp file */
+      }
       try {
         unlinkSync(tmpHnswPath);
-      } catch {}
+      } catch {
+        /* non-fatal: best-effort cleanup of temp file */
+      }
     }
   };
 
@@ -263,8 +267,8 @@ export async function createSemanticSearchManager(
       try {
         const saved = JSON.parse(readFileSync(initMapPath, "utf-8")) as HnswMapFile;
         if (saved.dims) savedDims = saved.dims;
-      } catch {
-        /* will fall through to rebuild */
+      } catch (err) {
+        log.debug(`Failed to read saved HNSW map for dims: ${err instanceof Error ? err.message : err}`);
       }
     }
 
@@ -277,7 +281,7 @@ export async function createSemanticSearchManager(
         dimsProbed = true;
       }
     } catch {
-      // Provider may not be ready yet; fall back to saved dims
+      // non-fatal: provider may not be ready yet; falls back to saved dims
       if (savedDims) {
         dims = savedDims;
         dimsProbed = true;
@@ -300,10 +304,14 @@ export async function createSemanticSearchManager(
       );
       try {
         unlinkSync(initPath!);
-      } catch {}
+      } catch {
+        /* non-fatal: best-effort removal of stale index file */
+      }
       try {
         unlinkSync(initMapPath!);
-      } catch {}
+      } catch {
+        /* non-fatal: best-effort removal of stale map file */
+      }
       savedDims = undefined; // Force fresh start
     }
   }
@@ -397,10 +405,14 @@ export async function createSemanticSearchManager(
         // Delete stale files so we start clean
         try {
           unlinkSync(initPath);
-        } catch {}
+        } catch {
+          /* non-fatal: best-effort removal of corrupt index file */
+        }
         try {
           unlinkSync(initMapPath);
-        } catch {}
+        } catch {
+          /* non-fatal: best-effort removal of corrupt map file */
+        }
         metadata.clear();
         idToLabel.clear();
         existingIds.clear();
@@ -481,6 +493,7 @@ export async function createSemanticSearchManager(
         try {
           label = BigInt(rawKey);
         } catch {
+          /* non-fatal: unparseable key, skipped via label = null */
           label = null;
         }
       }

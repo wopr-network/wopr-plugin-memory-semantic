@@ -22,7 +22,9 @@ export type MemoryChunk = {
 export function ensureDir(dir: string): string {
   try {
     fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  } catch {
+    /* non-fatal: directory may already exist */
+  }
   return dir;
 }
 
@@ -90,7 +92,9 @@ export async function listMemoryFiles(workspaceDir: string, extraPaths?: string[
         return;
       }
       result.push(absPath);
-    } catch {}
+    } catch {
+      /* non-fatal: file may not exist */
+    }
   };
 
   await addMarkdownFile(memoryFile);
@@ -100,7 +104,9 @@ export async function listMemoryFiles(workspaceDir: string, extraPaths?: string[
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       await walkDir(memoryDir, result);
     }
-  } catch {}
+  } catch {
+    /* non-fatal: memory/ directory may not exist */
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
@@ -117,7 +123,9 @@ export async function listMemoryFiles(workspaceDir: string, extraPaths?: string[
         if (stat.isFile() && inputPath.endsWith(".md")) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch {
+        /* non-fatal: extra path may not exist */
+      }
     }
   }
   if (result.length <= 1) {
@@ -129,7 +137,9 @@ export async function listMemoryFiles(workspaceDir: string, extraPaths?: string[
     let key = entry;
     try {
       key = await fs.realpath(entry);
-    } catch {}
+    } catch {
+      /* non-fatal: realpath failure is harmless, use original path for dedup */
+    }
     if (seen.has(key)) {
       continue;
     }
