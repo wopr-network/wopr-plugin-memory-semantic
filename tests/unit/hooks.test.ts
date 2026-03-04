@@ -49,7 +49,7 @@ function makeQueue() {
 }
 
 describe("handleBeforeInject", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it("returns early when state.initialized is false", async () => {
     const state = makeState({ initialized: false });
@@ -132,7 +132,7 @@ describe("handleBeforeInject", () => {
 });
 
 describe("handleAfterInject", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it("returns early when state.initialized is false", async () => {
     const state = makeState({ initialized: false });
