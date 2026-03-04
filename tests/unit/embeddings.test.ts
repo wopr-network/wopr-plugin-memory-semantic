@@ -4,7 +4,7 @@
  * Tests sanitizeAndNormalizeEmbedding (exported pure function)
  * and provider factory error handling.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createEmbeddingProvider, createOpenAiEmbeddingProvider, createGeminiEmbeddingProvider, sanitizeAndNormalizeEmbedding } from "../../src/embeddings.js";
 import { DEFAULT_CONFIG, type SemanticMemoryConfig } from "../../src/types.js";
@@ -80,7 +80,7 @@ describe("sanitizeAndNormalizeEmbedding", () => {
 // Provider factory error handling
 // =============================================================================
 
-describe.sequential("createOpenAiEmbeddingProvider", () => {
+describe("createOpenAiEmbeddingProvider", () => {
   let restoreEnv: () => void;
 
   beforeEach(() => {
@@ -98,9 +98,24 @@ describe.sequential("createOpenAiEmbeddingProvider", () => {
       createOpenAiEmbeddingProvider(makeConfig({ apiKey: undefined })),
     ).rejects.toThrow("No API key found for OpenAI");
   });
+
+  it("should warn when apiKey comes from config instead of env var", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const provider = await createOpenAiEmbeddingProvider(
+        makeConfig({ provider: "openai", apiKey: "sk-test-from-config" }),
+      );
+      expect(provider.id).toBe("openai");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("API key loaded from plugin config"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
-describe.sequential("createGeminiEmbeddingProvider", () => {
+describe("createGeminiEmbeddingProvider", () => {
   let restoreEnv: () => void;
 
   beforeEach(() => {
@@ -119,9 +134,28 @@ describe.sequential("createGeminiEmbeddingProvider", () => {
       createGeminiEmbeddingProvider(makeConfig({ apiKey: undefined })),
     ).rejects.toThrow("No API key found for Gemini");
   });
+
+  it("should warn when apiKey comes from config instead of env var", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ embedding: { values: [1, 0] } }), { status: 200 }),
+    );
+    try {
+      const provider = await createGeminiEmbeddingProvider(
+        makeConfig({ provider: "gemini", apiKey: "gemini-test-from-config" }),
+      );
+      expect(provider.id).toBe("gemini");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("API key loaded from plugin config"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
 });
 
-describe.sequential("createEmbeddingProvider", () => {
+describe("createEmbeddingProvider", () => {
   let restoreEnv: () => void;
 
   beforeEach(() => {

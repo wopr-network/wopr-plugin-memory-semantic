@@ -13,6 +13,12 @@ import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
 
 export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
+  if (config.apiKey) {
+    log.warn(
+      "API key loaded from plugin config (stored in SQLite). " +
+        "For better security, set the OPENAI_API_KEY environment variable instead.",
+    );
+  }
   if (!apiKey) {
     throw new Error("No API key found for OpenAI. Set OPENAI_API_KEY environment variable.");
   }
@@ -52,6 +58,12 @@ const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 
 export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
   const apiKey = config.apiKey || process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
+  if (config.apiKey) {
+    log.warn(
+      "API key loaded from plugin config (stored in SQLite). " +
+        "For better security, set the GOOGLE_API_KEY or GEMINI_API_KEY environment variable instead.",
+    );
+  }
 
   if (!apiKey) {
     throw new Error("No API key found for Gemini. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.");
