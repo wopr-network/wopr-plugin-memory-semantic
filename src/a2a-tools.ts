@@ -48,7 +48,8 @@ function assertWithinBase(baseDir: string, filePath: string): void {
     targetReal = join(parentReal, filename);
   }
 
-  if (targetReal !== baseReal && !targetReal.startsWith(baseReal + sep)) {
+  const baseSep = baseReal === "/" ? baseReal : baseReal + sep;
+  if (targetReal !== baseReal && !targetReal.startsWith(baseSep)) {
     throw new PathTraversalError();
   }
 }
@@ -201,7 +202,7 @@ export function registerMemoryTools(
             else dailyFiles.push(entry);
           }
           dailyFiles.sort((a, b) => a.name.localeCompare(b.name));
-          const recent = dailyFiles.slice(-days);
+          const recent = days === 0 ? [] : dailyFiles.slice(-days);
           if (recent.length === 0) return { content: [{ type: "text", text: "No daily memory files yet." }] };
           const contents = recent
             .map(({ name, path }) => {
