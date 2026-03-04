@@ -159,3 +159,33 @@ export function persistNewEntryToDb(
     log.warn(`persistNewEntryToDb failed for ${id}: ${err instanceof Error ? err.message : err}`);
   }
 }
+
+/**
+ * Backfill instanceId on legacy entries (those with NULL instance_id).
+ * Returns the number of rows updated.
+ *
+ * **Important:** This function only updates the SQLite `chunks` table. The HNSW index
+ * persists `instanceId` in its `.map.json` file and loads it at startup. To make the
+ * backfill take full effect in semantic search queries, delete the HNSW `.bin` and
+ * `.map.json` files and restart the process to force an index rebuild.
+ */
+export function backfillLegacyInstanceId(api: PluginContextLike, instanceId: string, log: PersistenceLogger): number {
+  if (!instanceId || instanceId.trim() === "") {
+    throw new Error("instanceId must be a non-empty string");
+  }
+  const db = getDb(api);
+  if (!db) {
+    log.warn("backfillLegacyInstanceId: no database handle available");
+    return 0;
+  }
+
+  try {
+    const result = db.prepare(`UPDATE chunks SET instance_id = ? WHERE instance_id IS NULL`).run(instanceId);
+    const count = typeof result.changes === "number" ? result.changes : 0;
+    log.info(`Backfilled ${count} legacy entries with instanceId=${instanceId}`);
+    return count;
+  } catch (err) {
+    log.error(`backfillLegacyInstanceId failed: ${err instanceof Error ? err.message : err}`);
+    return 0;
+  }
+}

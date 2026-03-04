@@ -193,6 +193,7 @@ export class MemoryIndexManager {
       minScore?: number;
       temporal?: TemporalFilter;
       instanceId?: string;
+      excludeLegacyEntries?: boolean;
     },
   ): Promise<MemorySearchResult[]> {
     if (this.config.sync.onSearch && this.dirty) {
@@ -208,7 +209,13 @@ export class MemoryIndexManager {
     const maxResults = opts?.maxResults ?? this.config.query.maxResults;
     const temporal = opts?.temporal;
 
-    const results = await this.searchKeyword(cleaned, maxResults * 2, temporal, opts?.instanceId);
+    const results = await this.searchKeyword(
+      cleaned,
+      maxResults * 2,
+      temporal,
+      opts?.instanceId,
+      opts?.excludeLegacyEntries,
+    );
     return results.filter((entry) => entry.score >= minScore).slice(0, maxResults);
   }
 
@@ -217,6 +224,7 @@ export class MemoryIndexManager {
     limit: number,
     temporal?: TemporalFilter,
     instanceId?: string,
+    excludeLegacyEntries?: boolean,
   ): Promise<MemorySearchResult[]> {
     if (!this.fts.available) {
       return [];
@@ -231,10 +239,14 @@ export class MemoryIndexManager {
     const temporalFilter = buildTemporalFilter(temporal, "c");
     const hasTemporal = temporalFilter.sql.length > 0;
 
-    // If instanceId is set, filter to matching rows (or NULL — legacy/global visible to all).
+    // If instanceId is set, filter to matching rows.
+    // When excludeLegacyEntries is true, skip legacy rows (instance_id IS NULL).
+    // Otherwise, include legacy/global rows visible to all tenants.
     // Must JOIN with memory_chunks since FTS5 virtual tables don't have instance_id.
     const instanceFilter: { sql: string; params: (string | number)[] } = instanceId
-      ? { sql: ` AND (c.instance_id = ? OR c.instance_id IS NULL)`, params: [instanceId] }
+      ? excludeLegacyEntries
+        ? { sql: ` AND c.instance_id = ?`, params: [instanceId] }
+        : { sql: ` AND (c.instance_id = ? OR c.instance_id IS NULL)`, params: [instanceId] }
       : { sql: "", params: [] };
     const needsJoin = hasTemporal || instanceId;
 

@@ -162,7 +162,11 @@ export async function initialize(
     // Wire up keyword search from memory manager
     const keywordSearchFn = state.memoryManager
       ? async (query: string, limit: number, instanceId?: string) => {
-          const results = await state.memoryManager!.search(query, { maxResults: limit, instanceId });
+          const results = await state.memoryManager!.search(query, {
+            maxResults: limit,
+            instanceId,
+            excludeLegacyEntries: !!(instanceId && state.config.search.excludeLegacyEntries),
+          });
           return results.map((r: any) => ({
             id: r.id || `${r.path}:${r.startLine}`,
             path: r.path,

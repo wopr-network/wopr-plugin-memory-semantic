@@ -35,6 +35,10 @@ src/
 - `tool-enhancer.ts` wraps tool results with memory context injection
 - **Gotcha**: Embedding dimensions must be consistent — changing embedding models requires re-indexing all stored memories
 
+## Known Limitations
+
+- **Legacy entry visibility (WOP-1553):** The HNSW index is shared across all tenants. Entries created before multi-tenancy (with `instanceId === undefined`) are visible to all tenant-scoped queries by default. To exclude them at runtime, set `search.excludeLegacyEntries: true` in config (this filters both HNSW vector results and FTS keyword results). To permanently fix, use `backfillLegacyInstanceId()` from `persistence.ts` to assign an instanceId to all legacy rows in SQLite — **however, you must also delete the HNSW `.bin` and `.map.json` files and restart** to force an index rebuild, since runtime queries use the in-memory HNSW metadata loaded from disk at startup.
+
 ## Plugin Contract
 
 Imports only from `@wopr-network/plugin-types`. Never import from `@wopr-network/wopr` core.
