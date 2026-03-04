@@ -52,7 +52,10 @@ const state: PluginState = {
   instanceId: undefined,
 };
 
-const embeddingQueue = new EmbeddingQueue({ info: console.info, error: console.error });
+const embeddingQueue = new EmbeddingQueue({
+  info: (...args) => console.info(...args), // eslint-disable-line no-console
+  error: (...args) => console.error(...args), // eslint-disable-line no-console
+});
 
 // =============================================================================
 // Plugin Export
@@ -134,20 +137,22 @@ const plugin: WOPRPlugin = {
     }
 
     // Register hooks via the event bus — store cleanup functions for shutdown
-    const unsubBeforeInject = ctx.events.on("session:beforeInject", (payload: any) =>
-      handleBeforeInject(state, ctx!.log, payload),
-    );
-    const unsubAfterInject = ctx.events.on("session:afterInject", (payload: any) =>
-      handleAfterInject(state, ctx!.log, embeddingQueue, payload),
-    );
+    const unsubBeforeInject = ctx.events.on("session:beforeInject", (payload: any) => {
+      if (ctx) handleBeforeInject(state, ctx.log, payload);
+    });
+    const unsubAfterInject = ctx.events.on("session:afterInject", (payload: any) => {
+      if (ctx) handleAfterInject(state, ctx.log, embeddingQueue, payload);
+    });
 
     // Subscribe to core's file change events for vector indexing
-    const unsubFilesChanged = ctx.events.on("memory:filesChanged", (payload: any) =>
-      handleFilesChanged(state, ctx!.log, embeddingQueue, payload),
-    );
+    const unsubFilesChanged = ctx.events.on("memory:filesChanged", (payload: any) => {
+      if (ctx) handleFilesChanged(state, ctx.log, embeddingQueue, payload);
+    });
 
     // Hook into memory:search to provide semantic results
-    const unsubSearch = ctx.events.on("memory:search", (payload: any) => handleMemorySearch(state, ctx!.log, payload));
+    const unsubSearch = ctx.events.on("memory:search", (payload: any) => {
+      if (ctx) handleMemorySearch(state, ctx.log, payload);
+    });
 
     cleanups.push(unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch);
     state.eventCleanup = [unsubBeforeInject, unsubAfterInject, unsubFilesChanged, unsubSearch];
