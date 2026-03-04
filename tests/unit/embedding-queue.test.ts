@@ -257,6 +257,24 @@ describe("EmbeddingQueue", () => {
 
       expect(persistFn).not.toHaveBeenCalled();
     });
+
+    it("should silently skip persist=true entries when no persistFn is configured", async () => {
+      const log = makeLogger();
+      const queue = new EmbeddingQueue(log);
+      const sm = makeSearchManager();
+      // attach() called without persistFn
+      queue.attach(sm as any);
+
+      queue.enqueue([makeEntry("a", true), makeEntry("b", true)], "test");
+      await vi.runAllTimersAsync();
+
+      // Entries should still be indexed even without a persistFn
+      expect(sm.addEntriesBatch).toHaveBeenCalledTimes(1);
+      const batch = sm.addEntriesBatch.mock.calls[0][0] as PendingEntry[];
+      expect(batch).toHaveLength(2);
+      // No warning or error logged — silent skip is the expected behavior
+      expect(log.error).not.toHaveBeenCalled();
+    });
   });
 
   // =========================================================================
