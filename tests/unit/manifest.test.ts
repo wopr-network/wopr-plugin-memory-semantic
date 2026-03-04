@@ -29,11 +29,11 @@ describe("pluginConfigSchema", () => {
     expect(field!.default).toBe(true);
   });
 
-  it("instanceId is text with no default", () => {
+  it("instanceId is text with default 'default'", () => {
     const field = pluginConfigSchema.fields.find((f) => f.name === "instanceId");
     expect(field).toBeDefined();
     expect(field!.type).toBe("text");
-    expect(field!.default).toBeUndefined();
+    expect(field!.default).toBe("default");
   });
 
   it("searchMaxResults is number with default 10", () => {
