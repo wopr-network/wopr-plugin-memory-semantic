@@ -59,6 +59,15 @@ describe("A2A tools path traversal protection", () => {
       expect(result.content[0].text).toContain("Path outside allowed directory");
     });
 
+    it("rejects absolute path traversal (/etc/passwd)", async () => {
+      const result = await ctx.tools.memory_read.handler(
+        { file: "/etc/passwd" },
+        { sessionName: "default" },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Path outside allowed directory");
+    });
+
     it("allows normal filenames", async () => {
       const result = await ctx.tools.memory_read.handler(
         { file: "safe.md" },
@@ -105,6 +114,10 @@ describe("A2A tools path traversal protection", () => {
         { sessionName: "default" },
       );
       expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.path).toBe("memory/safe.md");
+      expect(parsed.totalLines).toBeGreaterThan(0);
+      expect(parsed.text).toBe("safe content");
     });
   });
 });

@@ -10,12 +10,20 @@ import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
 import { parseTemporalFilter } from "./core-memory/types.js";
 
+/** Thrown when a path escapes its allowed base directory. */
+export class PathTraversalError extends Error {
+  constructor() {
+    super("Path outside allowed directory");
+    this.name = "PathTraversalError";
+  }
+}
+
 /** Throw if filePath escapes baseDir. */
 function assertWithinBase(baseDir: string, filePath: string): void {
   const resolvedBase = resolve(baseDir);
   const resolvedPath = resolve(filePath);
   if (resolvedPath !== resolvedBase && !resolvedPath.startsWith(resolvedBase + sep)) {
-    throw new Error("Path outside allowed directory");
+    throw new PathTraversalError();
   }
 }
 
@@ -25,6 +33,7 @@ function resolveMemoryFile(
   filename: string,
   globalMemoryDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
+  if (filename.startsWith(sep)) throw new PathTraversalError();
   const globalPath = join(globalMemoryDir, filename);
   assertWithinBase(globalMemoryDir, globalPath);
   if (existsSync(globalPath)) {
@@ -43,6 +52,7 @@ function resolveRootFile(
   filename: string,
   globalIdentityDir: string,
 ): { path: string; exists: boolean; isGlobal: boolean } {
+  if (filename.startsWith(sep)) throw new PathTraversalError();
   const globalPath = join(globalIdentityDir, filename);
   assertWithinBase(globalIdentityDir, globalPath);
   if (existsSync(globalPath)) {
@@ -198,9 +208,8 @@ export function registerMemoryTools(
         }
         return { content: [{ type: "text", text: content }] };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message === "Path outside allowed directory") {
-          return { content: [{ type: "text", text: message }], isError: true };
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
         }
         throw err;
       }
@@ -245,9 +254,8 @@ export function registerMemoryTools(
 
         return { content: [{ type: "text", text: `${shouldAppend ? "Appended to" : "Wrote"} ${filename}` }] };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message === "Path outside allowed directory") {
-          return { content: [{ type: "text", text: message }], isError: true };
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
         }
         throw err;
       }
@@ -385,9 +393,8 @@ export function registerMemoryTools(
           ],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message === "Path outside allowed directory") {
-          return { content: [{ type: "text", text: message }], isError: true };
+        if (err instanceof PathTraversalError) {
+          return { content: [{ type: "text", text: err.message }], isError: true };
         }
         throw err;
       }
