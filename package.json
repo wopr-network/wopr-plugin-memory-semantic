@@ -52,6 +52,18 @@
       {
         "name": "memory",
         "description": "Semantic memory with auto-capture and auto-recall"
+      },
+      {
+        "name": "semantic-search",
+        "description": "Semantic search over stored memories using vector embeddings"
+      },
+      {
+        "name": "auto-recall",
+        "description": "Automatically injects relevant memories into LLM context"
+      },
+      {
+        "name": "auto-capture",
+        "description": "Automatically extracts and stores key facts from conversations"
       }
     ],
     "provides": {
@@ -60,6 +72,21 @@
           "type": "memory",
           "id": "semantic-memory",
           "displayName": "Semantic Memory (Embeddings)"
+        },
+        {
+          "type": "semantic-search",
+          "id": "semantic-search",
+          "displayName": "Semantic Search"
+        },
+        {
+          "type": "auto-recall",
+          "id": "auto-recall",
+          "displayName": "Auto-Recall"
+        },
+        {
+          "type": "auto-capture",
+          "id": "auto-capture",
+          "displayName": "Auto-Capture"
         }
       ]
     },
