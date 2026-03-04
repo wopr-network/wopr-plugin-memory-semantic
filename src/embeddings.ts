@@ -156,8 +156,6 @@ async function importNodeLlamaCpp(): Promise<{
   resolveModelFile: (path: string, cacheDir?: string) => Promise<string>;
   LlamaLogLevel: { error: number };
 }> {
-  // Dynamic import for optional dependency; @ts-expect-error suppresses missing-module error for optional pkg
-  // @ts-expect-error
   return await import("node-llama-cpp");
 }
 
