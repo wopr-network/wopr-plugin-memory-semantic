@@ -4,7 +4,7 @@
  * Tests handleBeforeInject and handleAfterInject covering early-return guards,
  * error isolation, real-time indexing, multi-scale chunking, and auto-capture.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock all dependencies before importing
 vi.mock("../../src/recall.js", () => ({
@@ -133,6 +133,9 @@ describe("handleBeforeInject", () => {
 
 describe("handleAfterInject", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.mocked(contentHash).mockImplementation((s: string) => `hash-${s.slice(0, 10)}`);
+  });
 
   it("returns early when state.initialized is false", async () => {
     const state = makeState({ initialized: false });
@@ -223,7 +226,7 @@ describe("handleAfterInject", () => {
     const state = makeState();
     state.config.chunking.multiScale = {
       enabled: true,
-      scales: [{ chunkSize: 100, overlap: 20 }],
+      scales: [{ tokens: 100, overlap: 20 }],
     };
     const queue = makeQueue();
     vi.mocked(multiScaleChunk).mockReturnValue([
@@ -238,6 +241,13 @@ describe("handleAfterInject", () => {
     await handleAfterInject(state as any, makeLog(), queue as any, payload);
 
     expect(multiScaleChunk).toHaveBeenCalled();
+
+    // Assert arguments to multiScaleChunk to validate wiring
+    const [textArg, , metaArg, scalesArg] = vi.mocked(multiScaleChunk).mock.calls[0];
+    expect(textArg).toBe(payload.response);
+    expect(metaArg).toEqual(expect.objectContaining({ path: "session:ms-sess" }));
+    expect(scalesArg).toEqual(state.config.chunking.multiScale.scales);
+
     const [entries] = queue.enqueue.mock.calls[0];
     expect(entries[0].persist).toBe(true);
   });
@@ -247,7 +257,7 @@ describe("handleAfterInject", () => {
     state.config.autoCapture.enabled = true;
     const queue = makeQueue();
     vi.mocked(extractFromConversation).mockReturnValue([
-      { text: "Remember: project uses TypeScript", category: "preference" as any, confidence: 0.9, trigger: "remember" },
+      { text: "Remember: project uses TypeScript", category: "preference" as any, importance: 0.9 },
     ] as any);
 
     const payload = {
@@ -257,6 +267,18 @@ describe("handleAfterInject", () => {
     };
 
     await handleAfterInject(state as any, makeLog(), queue as any, payload);
+
+    // Assert extractFromConversation called with correct conversation and config
+    expect(extractFromConversation).toHaveBeenCalledTimes(1);
+    expect(extractFromConversation).toHaveBeenCalledWith(
+      [
+        { role: "user", content: payload.message },
+        { role: "assistant", content: payload.response },
+      ],
+      expect.objectContaining({
+        autoCapture: expect.objectContaining({ enabled: true }),
+      }),
+    );
 
     // Should have calls for realtime indexing + capture
     const captureCall = queue.enqueue.mock.calls.find(
@@ -300,8 +322,5 @@ describe("handleAfterInject", () => {
     expect(log.error).toHaveBeenCalledWith(
       expect.stringContaining("hash boom"),
     );
-
-    // Restore normal mock
-    vi.mocked(contentHash).mockImplementation((s: string) => `hash-${s.slice(0, 10)}`);
   });
 });
