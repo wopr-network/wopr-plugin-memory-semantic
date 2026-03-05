@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
 import { fallbackLogger as log } from "./fallback-logger.js";
@@ -204,8 +205,60 @@ export async function createSemanticSearchManager(
   const resolveHnswPath = (): string | undefined =>
     typeof hnswPathOrFn === "function" ? hnswPathOrFn() : hnswPathOrFn;
 
-  // ── Save helper ──────────────────────────────────────────────────────
-  const saveIndex = (): void => {
+  // ── Async save helper (non-blocking) ─────────────────────────────────
+  const saveIndexAsync = async (): Promise<void> => {
+    const hnswPath = resolveHnswPath();
+    if (!hnswPath) return;
+    const mapPath = `${hnswPath}.map.json`;
+    const tmpHnswPath = `${hnswPath}.tmp`;
+    const tmpMapPath = `${mapPath}.tmp`;
+    try {
+      await mkdir(dirname(hnswPath), { recursive: true });
+
+      const entries: (HnswMapEntryMeta | null)[] = [];
+      for (let i = 0n; i < nextLabel; i++) {
+        const entry = metadata.get(i);
+        entries.push(
+          entry
+            ? {
+                id: entry.id,
+                path: entry.path,
+                startLine: entry.startLine,
+                endLine: entry.endLine,
+                source: entry.source,
+                snippet: entry.snippet,
+                content: entry.content,
+                instanceId: entry.instanceId,
+              }
+            : null,
+        );
+      }
+      const map: HnswMapFile = { dims: index.dimensions(), entries };
+
+      // Write to temp files first, then atomically rename
+      await writeFile(tmpMapPath, JSON.stringify(map));
+      index.save(tmpHnswPath); // usearch save is always sync (native binding)
+      await rename(tmpMapPath, mapPath);
+      await rename(tmpHnswPath, hnswPath);
+
+      log.info(`Saved HNSW index to disk: ${metadata.size} vectors, ${hnswPath}`);
+    } catch (err) {
+      log.warn(`Failed to save HNSW index: ${err instanceof Error ? err.message : err}`);
+      try {
+        await unlink(tmpMapPath);
+      } catch {
+        /* non-fatal: best-effort cleanup of temp file */
+      }
+      try {
+        await unlink(tmpHnswPath);
+      } catch {
+        /* non-fatal: best-effort cleanup of temp file */
+      }
+    }
+  };
+
+  // ── Sync save helper (for shutdown only) ──────────────────────────────
+  const saveIndexSync = (): void => {
     const hnswPath = resolveHnswPath();
     if (!hnswPath) return;
     const mapPath = `${hnswPath}.map.json`;
@@ -234,7 +287,6 @@ export async function createSemanticSearchManager(
       }
       const map: HnswMapFile = { dims: index.dimensions(), entries };
 
-      // Write to temp files first, then atomically rename
       writeFileSync(tmpMapPath, JSON.stringify(map));
       index.save(tmpHnswPath);
       renameSync(tmpMapPath, mapPath);
@@ -441,7 +493,11 @@ export async function createSemanticSearchManager(
   let saveTimeout: NodeJS.Timeout | null = null;
   const scheduleSave = () => {
     if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => saveIndex(), 5000);
+    saveTimeout = setTimeout(() => {
+      saveIndexAsync().catch((err) => {
+        log.warn(`Scheduled save failed: ${err instanceof Error ? err.message : err}`);
+      });
+    }, 5000);
   };
 
   const getEmbedding = async (text: string): Promise<number[]> => {
@@ -731,7 +787,7 @@ export async function createSemanticSearchManager(
       );
       if (addedCount > 0) {
         log.info(`Saving HNSW index...`);
-        saveIndex();
+        await saveIndexAsync();
         const memSaved = process.memoryUsage();
         log.info(
           `Post-save: rss=${Math.round(memSaved.rss / 1024 / 1024)}MB ` +
@@ -746,7 +802,7 @@ export async function createSemanticSearchManager(
         clearTimeout(saveTimeout);
         saveTimeout = null;
       }
-      saveIndex();
+      saveIndexSync();
       embeddingCache.clear();
       log.info(`Closed: saved index, cleared cache, final size=${metadata.size}`);
     },
