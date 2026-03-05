@@ -12,13 +12,13 @@ import type { EmbeddingProvider, SemanticMemoryConfig } from "./types.js";
 // =============================================================================
 
 export async function createOpenAiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY?.trim();
   if (config.apiKey) {
     log.warn(
-      "API key loaded from plugin config (stored in SQLite). " +
-        "For better security, set the OPENAI_API_KEY environment variable instead.",
+      "apiKey in plugin config is ignored for security (OWASP A02). " +
+        "Remove it from config and set the OPENAI_API_KEY environment variable.",
     );
   }
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("No API key found for OpenAI. Set OPENAI_API_KEY environment variable.");
   }
@@ -63,13 +63,13 @@ const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1bet
 const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 
 export async function createGeminiEmbeddingProvider(config: SemanticMemoryConfig): Promise<EmbeddingProvider> {
-  const apiKey = config.apiKey || process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
   if (config.apiKey) {
     log.warn(
-      "API key loaded from plugin config (stored in SQLite). " +
-        "For better security, set the GOOGLE_API_KEY or GEMINI_API_KEY environment variable instead.",
+      "apiKey in plugin config is ignored for security (OWASP A02). " +
+        "Remove it from config and set the GOOGLE_API_KEY or GEMINI_API_KEY environment variable.",
     );
   }
+  const apiKey = process.env.GOOGLE_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
 
   if (!apiKey) {
     throw new Error("No API key found for Gemini. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.");
