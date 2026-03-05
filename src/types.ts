@@ -8,7 +8,7 @@ export interface SemanticMemoryConfig {
   model: string;
 
   // API configuration
-  /** @deprecated Ignored at runtime. Use environment variables instead (OPENAI_API_KEY, GOOGLE_API_KEY). */
+  /** @deprecated Ignored at runtime. Use environment variables instead (OPENAI_API_KEY, GOOGLE_API_KEY, GEMINI_API_KEY). */
   apiKey?: string;
   baseUrl?: string;
 
