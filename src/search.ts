@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Index, MetricKind, ScalarKind } from "usearch";
 import { fallbackLogger as log } from "./fallback-logger.js";
@@ -204,8 +205,77 @@ export async function createSemanticSearchManager(
   const resolveHnswPath = (): string | undefined =>
     typeof hnswPathOrFn === "function" ? hnswPathOrFn() : hnswPathOrFn;
 
-  // ── Save helper ──────────────────────────────────────────────────────
-  const saveIndex = (): void => {
+  // ── Shared snapshot helper ───────────────────────────────────────────
+  const buildIndexSnapshot = (): (HnswMapEntryMeta | null)[] => {
+    const entries: (HnswMapEntryMeta | null)[] = [];
+    for (let i = 0n; i < nextLabel; i++) {
+      const entry = metadata.get(i);
+      entries.push(
+        entry
+          ? {
+              id: entry.id,
+              path: entry.path,
+              startLine: entry.startLine,
+              endLine: entry.endLine,
+              source: entry.source,
+              snippet: entry.snippet,
+              content: entry.content,
+              instanceId: entry.instanceId,
+            }
+          : null,
+      );
+    }
+    return entries;
+  };
+
+  // ── Save mutex: serialize all saves so they don't contend on tmp files ─
+  let saveInFlight: Promise<void> = Promise.resolve();
+
+  // ── Async save helper (non-blocking) ─────────────────────────────────
+  const saveIndexAsync = (): Promise<void> => {
+    const doSave = async (): Promise<void> => {
+      const hnswPath = resolveHnswPath();
+      if (!hnswPath) return;
+      const mapPath = `${hnswPath}.map.json`;
+      const tmpHnswPath = `${hnswPath}.tmp`;
+      const tmpMapPath = `${mapPath}.tmp`;
+      try {
+        await mkdir(dirname(hnswPath), { recursive: true });
+
+        // Snapshot entries AND save HNSW atomically (both sync, no event-loop yield between them)
+        const entries = buildIndexSnapshot();
+        const map: HnswMapFile = { dims: index.dimensions(), entries };
+        const mapJson = JSON.stringify(map);
+        index.save(tmpHnswPath); // usearch save is always sync (native binding)
+
+        // Now write map file (async I/O is safe — snapshot is already captured)
+        await writeFile(tmpMapPath, mapJson);
+        await rename(tmpMapPath, mapPath);
+        await rename(tmpHnswPath, hnswPath);
+
+        log.info(`Saved HNSW index to disk: ${metadata.size} vectors, ${hnswPath}`);
+      } catch (err) {
+        log.warn(`Failed to save HNSW index: ${err instanceof Error ? err.message : err}`);
+        try {
+          await unlink(tmpMapPath);
+        } catch {
+          /* non-fatal: best-effort cleanup of temp file */
+        }
+        try {
+          await unlink(tmpHnswPath);
+        } catch {
+          /* non-fatal: best-effort cleanup of temp file */
+        }
+      }
+    };
+
+    // Chain onto the mutex so only one save runs at a time
+    saveInFlight = saveInFlight.then(doSave, doSave);
+    return saveInFlight;
+  };
+
+  // ── Sync save helper (for shutdown only) ──────────────────────────────
+  const saveIndexSync = (): void => {
     const hnswPath = resolveHnswPath();
     if (!hnswPath) return;
     const mapPath = `${hnswPath}.map.json`;
@@ -214,27 +284,10 @@ export async function createSemanticSearchManager(
     try {
       mkdirSync(dirname(hnswPath), { recursive: true });
 
-      const entries: (HnswMapEntryMeta | null)[] = [];
-      for (let i = 0n; i < nextLabel; i++) {
-        const entry = metadata.get(i);
-        entries.push(
-          entry
-            ? {
-                id: entry.id,
-                path: entry.path,
-                startLine: entry.startLine,
-                endLine: entry.endLine,
-                source: entry.source,
-                snippet: entry.snippet,
-                content: entry.content,
-                instanceId: entry.instanceId,
-              }
-            : null,
-        );
-      }
+      // Snapshot entries AND save HNSW atomically (both sync)
+      const entries = buildIndexSnapshot();
       const map: HnswMapFile = { dims: index.dimensions(), entries };
 
-      // Write to temp files first, then atomically rename
       writeFileSync(tmpMapPath, JSON.stringify(map));
       index.save(tmpHnswPath);
       renameSync(tmpMapPath, mapPath);
@@ -441,7 +494,11 @@ export async function createSemanticSearchManager(
   let saveTimeout: NodeJS.Timeout | null = null;
   const scheduleSave = () => {
     if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => saveIndex(), 5000);
+    saveTimeout = setTimeout(() => {
+      saveIndexAsync().catch((err) => {
+        log.warn(`Scheduled save failed: ${err instanceof Error ? err.message : err}`);
+      });
+    }, 5000);
   };
 
   const getEmbedding = async (text: string): Promise<number[]> => {
@@ -731,7 +788,7 @@ export async function createSemanticSearchManager(
       );
       if (addedCount > 0) {
         log.info(`Saving HNSW index...`);
-        saveIndex();
+        await saveIndexAsync();
         const memSaved = process.memoryUsage();
         log.info(
           `Post-save: rss=${Math.round(memSaved.rss / 1024 / 1024)}MB ` +
@@ -746,7 +803,9 @@ export async function createSemanticSearchManager(
         clearTimeout(saveTimeout);
         saveTimeout = null;
       }
-      saveIndex();
+      // Wait for any in-flight async save to finish before sync save
+      await saveInFlight;
+      saveIndexSync();
       embeddingCache.clear();
       log.info(`Closed: saved index, cleared cache, final size=${metadata.size}`);
     },
