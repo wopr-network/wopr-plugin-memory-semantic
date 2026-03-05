@@ -99,19 +99,11 @@ describe("createOpenAiEmbeddingProvider", () => {
     ).rejects.toThrow("No API key found for OpenAI");
   });
 
-  it("should warn when apiKey comes from config instead of env var", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const provider = await createOpenAiEmbeddingProvider(
-        makeConfig({ provider: "openai", apiKey: "sk-test-from-config" }),
-      );
-      expect(provider.id).toBe("openai");
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("API key loaded from plugin config"),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+  it("should ignore config.apiKey and only use env var", async () => {
+    delete process.env.OPENAI_API_KEY;
+    await expect(
+      createOpenAiEmbeddingProvider(makeConfig({ provider: "openai", apiKey: "sk-from-config" })),
+    ).rejects.toThrow("OPENAI_API_KEY");
   });
 });
 
@@ -135,23 +127,12 @@ describe("createGeminiEmbeddingProvider", () => {
     ).rejects.toThrow("No API key found for Gemini");
   });
 
-  it("should warn when apiKey comes from config instead of env var", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ embedding: { values: [1, 0] } }), { status: 200 }),
-    );
-    try {
-      const provider = await createGeminiEmbeddingProvider(
-        makeConfig({ provider: "gemini", apiKey: "gemini-test-from-config" }),
-      );
-      expect(provider.id).toBe("gemini");
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("API key loaded from plugin config"),
-      );
-    } finally {
-      warnSpy.mockRestore();
-      fetchSpy.mockRestore();
-    }
+  it("should ignore config.apiKey and only use env var", async () => {
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    await expect(
+      createGeminiEmbeddingProvider(makeConfig({ provider: "gemini", apiKey: "gemini-from-config" })),
+    ).rejects.toThrow("GOOGLE_API_KEY");
   });
 });
 
@@ -171,13 +152,14 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
   });
 
   it("should truncate long error payloads to 200 chars", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
     const longPayload = "x".repeat(500);
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(longPayload, { status: 400 }),
     );
     try {
       const provider = await createGeminiEmbeddingProvider(
-        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+        makeConfig({ provider: "gemini" }),
       );
       await expect(provider.embedQuery("hello")).rejects.toThrow(
         /Gemini embeddings failed: 400 x{200}\.\.\.\[truncated\]/,
@@ -188,13 +170,14 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
   });
 
   it("should preserve short error payloads as-is", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
     const shortPayload = "Bad request";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(shortPayload, { status: 400 }),
     );
     try {
       const provider = await createGeminiEmbeddingProvider(
-        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+        makeConfig({ provider: "gemini" }),
       );
       await expect(provider.embedQuery("hello")).rejects.toThrow(
         `Gemini embeddings failed: 400 Bad request`,
@@ -205,6 +188,7 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
   });
 
   it("should not leak API keys in truncated error messages", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
     const apiKey = "AIzaSyDEADBEEF1234567890SECRETKEY";
     // Place the key after the 200-char mark so truncation removes it
     const payloadWithKey = "a".repeat(201) + apiKey;
@@ -213,7 +197,7 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
     );
     try {
       const provider = await createGeminiEmbeddingProvider(
-        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+        makeConfig({ provider: "gemini" }),
       );
       await expect(provider.embedQuery("hello")).rejects.toSatisfy((err: Error) => {
         return !err.message.includes(apiKey);
@@ -224,6 +208,7 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
   });
 
   it("should truncate long batch error payloads", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
     const longPayload = "y".repeat(500);
     let callCount = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -232,7 +217,7 @@ describe("Gemini error payload truncation (WOP-1554)", () => {
     });
     try {
       const provider = await createGeminiEmbeddingProvider(
-        makeConfig({ provider: "gemini", apiKey: "test-key" }),
+        makeConfig({ provider: "gemini" }),
       );
       await expect(provider.embedBatch(["hello", "world"])).rejects.toThrow(
         /Gemini batch embeddings failed: 500 y{200}\.\.\.\[truncated\]/,

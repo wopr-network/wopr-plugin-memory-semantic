@@ -13,13 +13,6 @@ export const pluginConfigSchema: ConfigSchema = {
       default: "auto",
     },
     {
-      name: "apiKey",
-      type: "password",
-      label: "API Key",
-      description: "API key for the embedding provider (OpenAI or Gemini)",
-      secret: true,
-    },
-    {
       name: "model",
       type: "text",
       label: "Embedding Model",

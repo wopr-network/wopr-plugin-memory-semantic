@@ -78,7 +78,6 @@ export function mapFlatConfigToNested(raw: Record<string, unknown>): Partial<Sem
 
   // Pass-through flat keys that are already flat in SemanticMemoryConfig
   if (raw.provider !== undefined) config.provider = raw.provider as SemanticMemoryConfig["provider"];
-  if (raw.apiKey !== undefined) config.apiKey = raw.apiKey as string;
   if (raw.model !== undefined) config.model = raw.model as string;
   if (raw.baseUrl !== undefined) config.baseUrl = raw.baseUrl as string;
   if (raw.maxWriteBytes !== undefined) config.maxWriteBytes = raw.maxWriteBytes as number;

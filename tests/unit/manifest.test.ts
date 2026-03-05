@@ -6,7 +6,7 @@ describe("pluginConfigSchema", () => {
   it("includes all required field names", () => {
     const names = pluginConfigSchema.fields.map((f) => f.name);
     expect(names).toContain("provider");
-    expect(names).toContain("apiKey");
+    expect(names).not.toContain("apiKey");
     expect(names).toContain("model");
     expect(names).toContain("maxWriteBytes");
     expect(names).toContain("autoRecallEnabled");
@@ -100,9 +100,8 @@ describe("mapFlatConfigToNested", () => {
   });
 
   it("passes through flat keys directly", () => {
-    const result = mapFlatConfigToNested({ provider: "openai", apiKey: "sk-abc", model: "ada", maxWriteBytes: 2048, instanceId: "bot1" });
+    const result = mapFlatConfigToNested({ provider: "openai", model: "ada", maxWriteBytes: 2048, instanceId: "bot1" });
     expect(result.provider).toBe("openai");
-    expect(result.apiKey).toBe("sk-abc");
     expect(result.model).toBe("ada");
     expect(result.maxWriteBytes).toBe(2048);
     expect(result.instanceId).toBe("bot1");

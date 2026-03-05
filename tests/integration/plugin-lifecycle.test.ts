@@ -58,7 +58,6 @@ function createMockContext(): WOPRPluginContext & {
     },
     getConfig: vi.fn(() => ({
       provider: "openai",
-      apiKey: "test-key-fake",
     })),
     getExtension: vi.fn(() => null),
     registerConfigSchema: vi.fn(),
