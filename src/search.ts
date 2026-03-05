@@ -676,11 +676,14 @@ export async function createSemanticSearchManager(
           throw new Error(`Failed after ${maxRetries} rate limit retries`);
         }
 
-        if (embeddings.length !== batchEntries.length) {
-          log.warn(`Embedding batch size mismatch: expected ${batchEntries.length}, got ${embeddings.length}`);
-        }
-
         batchStart = batchEnd;
+
+        if (embeddings.length !== batchEntries.length) {
+          log.error(
+            `Embedding batch size mismatch (expected ${batchEntries.length}, got ${embeddings.length}) — skipping batch to prevent index corruption`,
+          );
+          continue;
+        }
 
         const t0 = performance.now();
         let batchAdded = 0;
