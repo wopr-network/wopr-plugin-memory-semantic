@@ -165,6 +165,11 @@ export function registerMemoryTools(
           ? Math.min(Math.floor(params.limit), 100)
           : 10;
 
+      // Require auth token for all search paths
+      if (!auth.token) {
+        throw new Error("Authentication required: missing token");
+      }
+
       if (searchFn) {
         // Direct search — no LLM involved, no prompt injection risk
         const results = await searchFn(query, limit, instanceId);
@@ -186,8 +191,7 @@ export function registerMemoryTools(
 
       return {
         query,
-        response: result.response,
-        session: result.session,
+        results: [result.response],
       };
     },
   });

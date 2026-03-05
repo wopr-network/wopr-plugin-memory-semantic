@@ -64,6 +64,23 @@ describe("WebMCP tool registration in init()", () => {
     );
   });
 
+  it("should pass a searchFn that delegates to state.searchManager.search", async () => {
+    const ctx = createMockContext({ hasWebmcpRegistry: true });
+    await plugin.init(ctx as any);
+
+    // Extract the searchFn passed as the 4th argument
+    const searchFn = (mockRegisterWebMCP as ReturnType<typeof vi.fn>).mock.calls[0][3] as (
+      query: string,
+      limit: number,
+      instanceId?: string,
+    ) => Promise<unknown[]>;
+
+    expect(typeof searchFn).toBe("function");
+
+    // searchFn should throw because searchManager is not initialized in the mock
+    expect(() => searchFn("test", 10, "inst")).toThrow("Semantic memory not initialized");
+  });
+
   it("should skip registerMemoryTools when webmcpRegistry is absent", async () => {
     const ctx = createMockContext({ hasWebmcpRegistry: false });
     await plugin.init(ctx as any);
