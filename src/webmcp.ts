@@ -132,7 +132,12 @@ function escapeXml(str: string): string {
  *   preventing cross-tenant memory leakage in multi-bot deployments. Pass the same
  *   resolved value as the plugin uses (config.instanceId || WOPR_INSTANCE_ID).
  */
-export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/api", instanceId?: string): void {
+export function registerMemoryTools(
+  registry: WebMCPRegistryLike,
+  apiBase = "/api",
+  instanceId?: string,
+  searchFn?: (query: string, limit: number, instanceId?: string) => Promise<unknown[]>,
+): void {
   // 1. searchMemory
   registry.register({
     name: "searchMemory",
@@ -160,10 +165,14 @@ export function registerMemoryTools(registry: WebMCPRegistryLike, apiBase = "/ap
           ? Math.min(Math.floor(params.limit), 100)
           : 10;
 
-      // Call the daemon's session inject endpoint with a structured search request.
-      // The bot invokes the memory_search tool and returns results.
-      // Query is wrapped in XML delimiters so the model treats it as opaque data,
-      // not as instructions — preventing indirect prompt injection.
+      if (searchFn) {
+        // Direct search — no LLM involved, no prompt injection risk
+        const results = await searchFn(query, limit, instanceId);
+        return { query, results };
+      }
+
+      // Legacy fallback: route through LLM (kept for backwards compat when
+      // searchFn is not provided, e.g. standalone WebMCP without plugin context)
       const result = await daemonRequest<{
         session: string;
         response: string;

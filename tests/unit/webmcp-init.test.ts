@@ -60,6 +60,7 @@ describe("WebMCP tool registration in init()", () => {
       ctx.webmcpRegistry,
       "/api",
       expect.any(String),
+      expect.any(Function),
     );
   });
 
