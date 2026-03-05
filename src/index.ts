@@ -186,6 +186,11 @@ const plugin: WOPRPlugin & {
     // The wizard stores flat keys (e.g. autoRecallEnabled) but initialize()
     // expects nested SemanticMemoryConfig — map them before passing.
     const rawConfig = ctx.getConfig?.() as Record<string, unknown> | undefined;
+    if (rawConfig?.apiKey) {
+      log.warn(
+        "[semantic-memory] Deprecated: 'apiKey' in config is ignored. Set OPENAI_API_KEY (or GEMINI_API_KEY) environment variable instead.",
+      );
+    }
     const storedConfig = rawConfig ? mapFlatConfigToNested(rawConfig) : undefined;
     await initialize(ctx, state, embeddingQueue, log, storedConfig);
 
