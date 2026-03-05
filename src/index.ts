@@ -238,7 +238,10 @@ const plugin: WOPRPlugin & {
     // Register WebMCP browser-side tools if the platform exposes a registry
     if (ctx.webmcpRegistry) {
       const registry = ctx.webmcpRegistry;
-      registerWebMCPTools(registry, "/api", state.instanceId);
+      registerWebMCPTools(registry, "/api", state.instanceId, (query, limit, instId) => {
+        if (!state.searchManager) throw new Error("Semantic memory not initialized");
+        return state.searchManager.search(query, limit, instId);
+      });
       cleanups.push(() => {
         unregisterWebMCPTools(registry);
       });
