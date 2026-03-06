@@ -56,7 +56,10 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
       try {
         validateSessionName(sessionName);
       } catch (err) {
-        return { content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }], isError: true };
+        return {
+          content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }],
+          isError: true,
+        };
       }
 
       // Try session-specific first
@@ -124,7 +127,10 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
       try {
         validateSessionName(sessionName);
       } catch (err) {
-        return { content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }], isError: true };
+        return {
+          content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }],
+          isError: true,
+        };
       }
       const { name, creature, vibe, emoji, section, sectionContent } = args;
 
