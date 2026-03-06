@@ -5,6 +5,7 @@
  */
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
 import type { MemoryIndexManager } from "./core-memory/manager.js";
@@ -147,6 +148,33 @@ function listAllMemoryFiles(sessionDir: string, globalMemoryDir: string): string
     }
   }
   return [...files];
+}
+
+/**
+ * Discover session directories that contain a memory/ subdirectory.
+ * Moved from core src/memory/index.ts (WOP-1774).
+ */
+export async function discoverSessionMemoryDirs(): Promise<string[]> {
+  const sessionsBase = join(process.env.WOPR_HOME || "", "sessions");
+  const dirs: string[] = [];
+  try {
+    const entries = await fs.readdir(sessionsBase, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const sessionDir = join(sessionsBase, entry.name);
+      const memDir = join(sessionDir, "memory");
+      try {
+        const stat = await fs.stat(memDir);
+        if (stat.isDirectory()) dirs.push(sessionDir);
+      } catch {
+        /* memory dir does not exist */
+      }
+    }
+  } catch (err) {
+    /* sessions dir does not exist or is unreadable */
+    console.debug(`[memory-semantic] discoverSessionMemoryDirs: sessions dir unavailable (${sessionsBase}): ${err}`);
+  }
+  return dirs;
 }
 
 /**

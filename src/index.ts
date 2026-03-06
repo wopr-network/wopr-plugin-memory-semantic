@@ -16,6 +16,7 @@ import { stopWatcher } from "./core-memory/watcher.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import { handleFilesChanged, handleMemorySearch } from "./event-handlers.js";
 import { handleAfterInject, handleBeforeInject } from "./hooks.js";
+import { IDENTITY_TOOL_PERMISSION_MAP, unregisterIdentityTools } from "./identity-tools.js";
 import { initialize, type PluginState } from "./init.js";
 import { contentHash, memoryContextProvider, pluginConfigSchema, pluginManifest } from "./manifest.js";
 import type { MemorySearchResult, SemanticMemoryConfig, SessionApi } from "./types.js";
@@ -38,6 +39,10 @@ interface PluginContext extends WOPRPluginContext {
   registerTool?(tool: any): void;
   session?: SessionApi;
   webmcpRegistry?: WebMCPRegistryLike;
+  registerPermission?(name: string): void;
+  unregisterPermission?(name: string): void;
+  registerToolPermission?(toolName: string, permission: string): void;
+  unregisterToolPermission?(toolName: string): void;
 }
 
 let ctx: PluginContext | null = null;
@@ -158,12 +163,15 @@ const plugin: WOPRPlugin & {
   },
 
   async init(api: WOPRPluginContext) {
-    ctx = api as PluginContext;
-    const log = ctx.log;
+    // Use new api's log from the start, but don't overwrite ctx yet —
+    // old cleanup closures capture the module-level ctx by reference.
+    // Running cleanups before ctx = api ensures they operate on the old context.
+    const log = api.log;
     embeddingQueue.setLogger(log);
     log.info("[semantic-memory] init() called");
 
-    // Clean up previous registrations if re-initialized
+    // Clean up previous registrations if re-initialized.
+    // IMPORTANT: run BEFORE overwriting ctx so closures still see the old context.
     for (let i = cleanups.length - 1; i >= 0; i--) {
       try {
         cleanups[i]();
@@ -174,9 +182,38 @@ const plugin: WOPRPlugin & {
     cleanups.length = 0;
     state.eventCleanup = [];
 
+    ctx = api as PluginContext;
+
     // Register config schema
     ctx.registerConfigSchema("wopr-plugin-memory-semantic", pluginConfigSchema);
     cleanups.push(() => ctx?.unregisterConfigSchema("wopr-plugin-memory-semantic"));
+
+    // Register security permissions
+    ctx.registerPermission?.("memory.read");
+    ctx.registerPermission?.("memory.write");
+    cleanups.push(() => {
+      ctx?.unregisterPermission?.("memory.read");
+      ctx?.unregisterPermission?.("memory.write");
+    });
+
+    // Register tool -> permission mappings.
+    // Identity tool entries are sourced from identity-tools.ts to keep names in sync.
+    const TOOL_PERMISSION_MAP: Array<[string, string]> = [
+      ["memory_read", "memory.read"],
+      ["memory_write", "memory.write"],
+      ["memory_search", "memory.read"],
+      ["memory_get", "memory.read"],
+      ["self_reflect", "memory.write"],
+      ...IDENTITY_TOOL_PERMISSION_MAP,
+    ];
+    for (const [tool, perm] of TOOL_PERMISSION_MAP) {
+      ctx.registerToolPermission?.(tool, perm);
+    }
+    cleanups.push(() => {
+      for (const [tool] of TOOL_PERMISSION_MAP) {
+        ctx?.unregisterToolPermission?.(tool);
+      }
+    });
 
     // Register context provider
     ctx.registerContextProvider(memoryContextProvider);
@@ -295,6 +332,7 @@ const plugin: WOPRPlugin & {
 
     // Unregister A2A tools
     unregisterMemoryTools(ctx);
+    unregisterIdentityTools(ctx);
 
     // Close memory manager
     if (state.memoryManager) {
