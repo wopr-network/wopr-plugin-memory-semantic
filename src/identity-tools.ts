@@ -29,6 +29,10 @@ export const IDENTITY_TOOL_PERMISSION_MAP: Array<[string, string]> = [
   ["identity_update", "memory.write"],
 ];
 
+/**
+ * Register identity tools (identity_get, identity_update) with the plugin context.
+ * No-ops if ctx.registerTool or ctx.session are unavailable, logging a warning instead.
+ */
 export function registerIdentityTools(ctx: WOPRPluginContext): void {
   if (typeof (ctx as ContextWithTools).registerTool !== "function") {
     ctx.log.warn("[memory-semantic] ctx.registerTool not available — identity tools will not be registered.");
@@ -56,7 +60,10 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
       try {
         validateSessionName(sessionName);
       } catch (err) {
-        return { content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }], isError: true };
+        return {
+          content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }],
+          isError: true,
+        };
       }
 
       // Try session-specific first
@@ -124,7 +131,10 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
       try {
         validateSessionName(sessionName);
       } catch (err) {
-        return { content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }], isError: true };
+        return {
+          content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }],
+          isError: true,
+        };
       }
       const { name, creature, vibe, emoji, section, sectionContent } = args;
 
@@ -183,6 +193,10 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
   ctx.log.info("[memory-semantic] Registered 2 identity tools");
 }
 
+/**
+ * Unregister all identity tools from the plugin context.
+ * No-ops if ctx.unregisterTool is unavailable, logging a warning instead.
+ */
 export function unregisterIdentityTools(ctx: WOPRPluginContext): void {
   if (typeof (ctx as ContextWithTools).unregisterTool !== "function") {
     ctx.log.warn("[memory-semantic] ctx.unregisterTool not available — identity tools cannot be unregistered.");
