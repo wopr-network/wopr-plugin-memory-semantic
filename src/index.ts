@@ -183,17 +183,18 @@ const plugin: WOPRPlugin & {
     state.eventCleanup = [];
 
     ctx = api as PluginContext;
+    const cleanupCtx = ctx; // capture for cleanup closures — prevents re-init from unregistering from wrong context
 
     // Register config schema
     ctx.registerConfigSchema("wopr-plugin-memory-semantic", pluginConfigSchema);
-    cleanups.push(() => ctx?.unregisterConfigSchema("wopr-plugin-memory-semantic"));
+    cleanups.push(() => cleanupCtx.unregisterConfigSchema("wopr-plugin-memory-semantic"));
 
     // Register security permissions
     ctx.registerPermission?.("memory.read");
     ctx.registerPermission?.("memory.write");
     cleanups.push(() => {
-      ctx?.unregisterPermission?.("memory.read");
-      ctx?.unregisterPermission?.("memory.write");
+      cleanupCtx.unregisterPermission?.("memory.read");
+      cleanupCtx.unregisterPermission?.("memory.write");
     });
 
     // Register tool -> permission mappings.
@@ -211,13 +212,13 @@ const plugin: WOPRPlugin & {
     }
     cleanups.push(() => {
       for (const [tool] of TOOL_PERMISSION_MAP) {
-        ctx?.unregisterToolPermission?.(tool);
+        cleanupCtx.unregisterToolPermission?.(tool);
       }
     });
 
     // Register context provider
     ctx.registerContextProvider(memoryContextProvider);
-    cleanups.push(() => ctx?.unregisterContextProvider("memory-semantic"));
+    cleanups.push(() => cleanupCtx.unregisterContextProvider("memory-semantic"));
 
     // Read config from WOPR central config (set by onboard wizard).
     // The wizard stores flat keys (e.g. autoRecallEnabled) but initialize()
@@ -273,7 +274,7 @@ const plugin: WOPRPlugin & {
     };
     if (ctx.registerExtension) {
       ctx.registerExtension("memory-semantic", extensionApi);
-      cleanups.push(() => ctx?.unregisterExtension?.("memory-semantic"));
+      cleanups.push(() => cleanupCtx.unregisterExtension?.("memory-semantic"));
     }
 
     // Register WebMCP browser-side tools if the platform exposes a registry
