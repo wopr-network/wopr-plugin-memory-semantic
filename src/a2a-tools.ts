@@ -183,8 +183,9 @@ export async function discoverSessionMemoryDirs(): Promise<string[]> {
         /* memory dir does not exist */
       }
     }
-  } catch {
-    /* sessions dir does not exist or is unreadable */
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    /* sessions dir does not exist — return empty */
   }
   return dirs;
 }
