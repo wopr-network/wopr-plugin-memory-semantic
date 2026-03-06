@@ -189,7 +189,6 @@ export function unregisterIdentityTools(ctx: WOPRPluginContext): void {
     return;
   }
   const api = ctx as ContextWithTools & { unregisterTool: (name: string) => void };
-<<<<<<< HEAD
   for (const name of IDENTITY_TOOL_NAMES as readonly string[]) {
     try {
       api.unregisterTool(name);
