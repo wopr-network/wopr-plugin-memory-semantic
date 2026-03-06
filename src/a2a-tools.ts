@@ -171,8 +171,8 @@ export async function discoverSessionMemoryDirs(): Promise<string[]> {
       }
     }
   } catch (err) {
-    /* sessions dir does not exist or is unreadable */
-    console.debug(`[memory-semantic] discoverSessionMemoryDirs: sessions dir unavailable (${sessionsBase}): ${err}`);
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    /* sessions dir does not exist */
   }
   return dirs;
 }

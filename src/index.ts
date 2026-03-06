@@ -184,16 +184,21 @@ const plugin: WOPRPlugin & {
 
     ctx = api as PluginContext;
 
+    // Capture the ctx reference at registration time so cleanup closures always
+    // target the ctx that was live when they were created, not whatever ctx is
+    // current at shutdown/re-init time.
+    const activeCtx = ctx;
+
     // Register config schema
-    ctx.registerConfigSchema("wopr-plugin-memory-semantic", pluginConfigSchema);
-    cleanups.push(() => ctx?.unregisterConfigSchema("wopr-plugin-memory-semantic"));
+    activeCtx.registerConfigSchema("wopr-plugin-memory-semantic", pluginConfigSchema);
+    cleanups.push(() => activeCtx.unregisterConfigSchema("wopr-plugin-memory-semantic"));
 
     // Register security permissions
-    ctx.registerPermission?.("memory.read");
-    ctx.registerPermission?.("memory.write");
+    activeCtx.registerPermission?.("memory.read");
+    activeCtx.registerPermission?.("memory.write");
     cleanups.push(() => {
-      ctx?.unregisterPermission?.("memory.read");
-      ctx?.unregisterPermission?.("memory.write");
+      activeCtx.unregisterPermission?.("memory.read");
+      activeCtx.unregisterPermission?.("memory.write");
     });
 
     // Register tool -> permission mappings.
@@ -207,17 +212,17 @@ const plugin: WOPRPlugin & {
       ...IDENTITY_TOOL_PERMISSION_MAP,
     ];
     for (const [tool, perm] of TOOL_PERMISSION_MAP) {
-      ctx.registerToolPermission?.(tool, perm);
+      activeCtx.registerToolPermission?.(tool, perm);
     }
     cleanups.push(() => {
       for (const [tool] of TOOL_PERMISSION_MAP) {
-        ctx?.unregisterToolPermission?.(tool);
+        activeCtx.unregisterToolPermission?.(tool);
       }
     });
 
     // Register context provider
-    ctx.registerContextProvider(memoryContextProvider);
-    cleanups.push(() => ctx?.unregisterContextProvider("memory-semantic"));
+    activeCtx.registerContextProvider(memoryContextProvider);
+    cleanups.push(() => activeCtx.unregisterContextProvider("memory-semantic"));
 
     // Read config from WOPR central config (set by onboard wizard).
     // The wizard stores flat keys (e.g. autoRecallEnabled) but initialize()
@@ -271,9 +276,9 @@ const plugin: WOPRPlugin & {
       },
       getConfig: (): SemanticMemoryConfig => ({ ...state.config }),
     };
-    if (ctx.registerExtension) {
-      ctx.registerExtension("memory-semantic", extensionApi);
-      cleanups.push(() => ctx?.unregisterExtension?.("memory-semantic"));
+    if (activeCtx.registerExtension) {
+      activeCtx.registerExtension("memory-semantic", extensionApi);
+      cleanups.push(() => activeCtx.unregisterExtension?.("memory-semantic"));
     }
 
     // Register WebMCP browser-side tools if the platform exposes a registry

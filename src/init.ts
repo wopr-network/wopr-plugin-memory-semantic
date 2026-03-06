@@ -152,12 +152,6 @@ export async function initialize(
     await state.memoryManager.sync();
     api.log.info("[semantic-memory] Initial memory sync complete");
 
-    // 8. Register A2A memory tools
-    registerMemoryTools(api, state.memoryManager, state.instanceId);
-
-    // 8b. Register identity tools (moved from core in WOP-1773)
-    registerIdentityTools(api);
-
     // Create embedding provider
     state.embeddingProvider = await createEmbeddingProvider(state.config);
     api.log.info(`[semantic-memory] Embedding provider: ${state.embeddingProvider.id}`);
@@ -220,6 +214,12 @@ export async function initialize(
     state.api = api;
     state.initialized = true;
     api.log.info(`[semantic-memory] Initialized with ${loadedVectors} persisted vectors`);
+
+    // Register A2A tools only after all async setup is complete, so a failure
+    // in embedding provider or search manager creation does not leak registered
+    // but non-functional tools.
+    registerMemoryTools(api, state.memoryManager, state.instanceId);
+    registerIdentityTools(api);
 
     // Bootstrap: if HNSW is empty but we have chunk metadata, embed them now
     if (loadedVectors === 0 && chunkMetadata.size > 0) {
