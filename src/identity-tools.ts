@@ -5,6 +5,7 @@
  */
 
 import type { WOPRPluginContext } from "@wopr-network/plugin-types";
+import { PathTraversalError, validateSessionName } from "./a2a-tools.js";
 
 interface ContextWithTools extends WOPRPluginContext {
   registerTool?: unknown;
@@ -20,7 +21,13 @@ interface PluginContextWithSession extends WOPRPluginContext {
   session?: SessionApi;
 }
 
-const IDENTITY_TOOL_NAMES = ["identity_get", "identity_update"];
+export const IDENTITY_TOOL_NAMES = ["identity_get", "identity_update"] as const;
+
+/** Tool-to-permission mappings for identity tools; imported by index.ts to build TOOL_PERMISSION_MAP. */
+export const IDENTITY_TOOL_PERMISSION_MAP: Array<[string, string]> = [
+  ["identity_get", "memory.read"],
+  ["identity_update", "memory.write"],
+];
 
 export function registerIdentityTools(ctx: WOPRPluginContext): void {
   if (typeof (ctx as ContextWithTools).registerTool !== "function") {
@@ -46,6 +53,11 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
     },
     handler: async (_args: Record<string, unknown>, context: any) => {
       const sessionName = context.sessionName || "default";
+      try {
+        validateSessionName(sessionName);
+      } catch (err) {
+        return { content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }], isError: true };
+      }
 
       // Try session-specific first
       let content = await sessionApi.getContext(sessionName, "IDENTITY.md");
@@ -109,6 +121,11 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
       context: any,
     ) => {
       const sessionName = context.sessionName || "default";
+      try {
+        validateSessionName(sessionName);
+      } catch (err) {
+        return { content: [{ type: "text", text: err instanceof PathTraversalError ? err.message : String(err) }], isError: true };
+      }
       const { name, creature, vibe, emoji, section, sectionContent } = args;
 
       // Read current content (session-specific, not global)
@@ -119,30 +136,37 @@ export function registerIdentityTools(ctx: WOPRPluginContext): void {
 
       const updates: string[] = [];
       if (name) {
-        content = content.replace(/[-*]\s*Name:\s*.+/i, `- Name: ${name}`);
-        if (!content.includes("Name:")) content += `- Name: ${name}\n`;
+        // Use replacer function to avoid JS special replacement patterns ($&, $', $`, $n).
+        // Detect no-op by comparing before/after, not with content.includes() which can
+        // match the substring anywhere in the file (e.g. in prose).
+        const before = content;
+        content = content.replace(/[-*]\s*Name:\s*.+/i, () => `- Name: ${name}`);
+        if (content === before) content += `- Name: ${name}\n`;
         updates.push(`name: ${name}`);
       }
       if (creature) {
-        content = content.replace(/[-*]\s*Creature:\s*.+/i, `- Creature: ${creature}`);
-        if (!content.includes("Creature:")) content += `- Creature: ${creature}\n`;
+        const before = content;
+        content = content.replace(/[-*]\s*Creature:\s*.+/i, () => `- Creature: ${creature}`);
+        if (content === before) content += `- Creature: ${creature}\n`;
         updates.push(`creature: ${creature}`);
       }
       if (vibe) {
-        content = content.replace(/[-*]\s*Vibe:\s*.+/i, `- Vibe: ${vibe}`);
-        if (!content.includes("Vibe:")) content += `- Vibe: ${vibe}\n`;
+        const before = content;
+        content = content.replace(/[-*]\s*Vibe:\s*.+/i, () => `- Vibe: ${vibe}`);
+        if (content === before) content += `- Vibe: ${vibe}\n`;
         updates.push(`vibe: ${vibe}`);
       }
       if (emoji) {
-        content = content.replace(/[-*]\s*Emoji:\s*.+/i, `- Emoji: ${emoji}`);
-        if (!content.includes("Emoji:")) content += `- Emoji: ${emoji}\n`;
+        const before = content;
+        content = content.replace(/[-*]\s*Emoji:\s*.+/i, () => `- Emoji: ${emoji}`);
+        if (content === before) content += `- Emoji: ${emoji}\n`;
         updates.push(`emoji: ${emoji}`);
       }
       if (section && sectionContent) {
         const safeSection = section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const sectionRegex = new RegExp(`## ${safeSection}[\\s\\S]*?(?=\\n## |$)`, "i");
         const newSection = `## ${section}\n\n${sectionContent}\n`;
-        if (content.match(sectionRegex)) content = content.replace(sectionRegex, newSection);
+        if (content.match(sectionRegex)) content = content.replace(sectionRegex, () => newSection);
         else content += `\n${newSection}`;
         updates.push(`section: ${section}`);
       }
@@ -165,7 +189,7 @@ export function unregisterIdentityTools(ctx: WOPRPluginContext): void {
     return;
   }
   const api = ctx as ContextWithTools & { unregisterTool: (name: string) => void };
-  for (const name of IDENTITY_TOOL_NAMES) {
+  for (const name of IDENTITY_TOOL_NAMES as readonly string[]) {
     try {
       api.unregisterTool(name);
     } catch {

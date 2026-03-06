@@ -104,4 +104,54 @@ describe("identity tools", () => {
       "session",
     );
   });
+
+  it("identity_get should reject an invalid session name", async () => {
+    const ctx = createMockContext();
+    registerIdentityTools(ctx);
+
+    const tool = ctx._tools.get("identity_get");
+    const result = await tool.handler({}, { sessionName: "../escape" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/invalid session name/i);
+    expect(ctx.session.getContext).not.toHaveBeenCalled();
+  });
+
+  it("identity_update should reject an invalid session name", async () => {
+    const ctx = createMockContext();
+    registerIdentityTools(ctx);
+
+    const tool = ctx._tools.get("identity_update");
+    const result = await tool.handler({ name: "test" }, { sessionName: "../escape" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/invalid session name/i);
+    expect(ctx.session.setContext).not.toHaveBeenCalled();
+  });
+
+  it("identity_update should preserve special JS replacement chars in field values", async () => {
+    const ctx = createMockContext();
+    ctx.session.getContext.mockResolvedValue("- Name: OldBot\n");
+    registerIdentityTools(ctx);
+
+    const tool = ctx._tools.get("identity_update");
+    const result = await tool.handler({ name: "New$&Bot" }, { sessionName: "test-session" });
+    expect(result.content[0].text).toContain("Identity updated");
+    const written = ctx.session.setContext.mock.calls[0][2] as string;
+    expect(written).toContain("New$&Bot");
+    // Without the () => value fix, $& would expand to the matched text ("- Name: OldBot")
+    expect(written).not.toContain("New- Name: OldBotBot");
+  });
+
+  it("identity_update should append field when replace is a no-op (field absent but substring present elsewhere)", async () => {
+    // "Name:" appears in prose but NOT as a structured bullet — old content.includes() check
+    // would skip the append, silently failing. New before/after comparison correctly appends.
+    const ctx = createMockContext();
+    ctx.session.getContext.mockResolvedValue("My Name: appears in prose here\n");
+    registerIdentityTools(ctx);
+
+    const tool = ctx._tools.get("identity_update");
+    const result = await tool.handler({ name: "TestBot" }, { sessionName: "test-session" });
+    expect(result.content[0].text).toContain("Identity updated");
+    const written = ctx.session.setContext.mock.calls[0][2] as string;
+    expect(written).toContain("- Name: TestBot");
+  });
 });
