@@ -162,6 +162,7 @@ const plugin: WOPRPlugin & {
     return { ...state.config };
   },
 
+  /** Initialize (or re-initialize) the plugin. Cleans up prior registrations before applying new ones. */
   async init(api: WOPRPluginContext) {
     // Use new api's log from the start, but don't overwrite ctx yet —
     // old cleanup closures capture the module-level ctx by reference.
@@ -311,6 +312,7 @@ const plugin: WOPRPlugin & {
     log.info("[semantic-memory] Plugin initialized - memory_search enhanced with semantic search");
   },
 
+  /** Shut down the plugin, stop background work, and unregister all hooks and providers. */
   async shutdown() {
     if (!ctx) return; // Idempotent
     const shutdownLog = ctx.log;
