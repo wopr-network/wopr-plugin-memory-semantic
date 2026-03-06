@@ -16,6 +16,7 @@ import { stopWatcher } from "./core-memory/watcher.js";
 import { EmbeddingQueue } from "./embedding-queue.js";
 import { handleFilesChanged, handleMemorySearch } from "./event-handlers.js";
 import { handleAfterInject, handleBeforeInject } from "./hooks.js";
+import { unregisterIdentityTools } from "./identity-tools.js";
 import { initialize, type PluginState } from "./init.js";
 import { contentHash, memoryContextProvider, pluginConfigSchema, pluginManifest } from "./manifest.js";
 import type { MemorySearchResult, SemanticMemoryConfig, SessionApi } from "./types.js";
@@ -38,6 +39,10 @@ interface PluginContext extends WOPRPluginContext {
   registerTool?(tool: any): void;
   session?: SessionApi;
   webmcpRegistry?: WebMCPRegistryLike;
+  registerPermission?(name: string): void;
+  unregisterPermission?(name: string): void;
+  registerToolPermission?(toolName: string, permission: string): void;
+  unregisterToolPermission?(toolName: string): void;
 }
 
 let ctx: PluginContext | null = null;
@@ -178,6 +183,33 @@ const plugin: WOPRPlugin & {
     ctx.registerConfigSchema("wopr-plugin-memory-semantic", pluginConfigSchema);
     cleanups.push(() => ctx?.unregisterConfigSchema("wopr-plugin-memory-semantic"));
 
+    // Register security permissions
+    ctx.registerPermission?.("memory.read");
+    ctx.registerPermission?.("memory.write");
+    cleanups.push(() => {
+      ctx?.unregisterPermission?.("memory.read");
+      ctx?.unregisterPermission?.("memory.write");
+    });
+
+    // Register tool -> permission mappings
+    const TOOL_PERMISSION_MAP: Array<[string, string]> = [
+      ["memory_read", "memory.read"],
+      ["memory_write", "memory.write"],
+      ["memory_search", "memory.read"],
+      ["memory_get", "memory.read"],
+      ["self_reflect", "memory.write"],
+      ["identity_get", "memory.read"],
+      ["identity_update", "memory.write"],
+    ];
+    for (const [tool, perm] of TOOL_PERMISSION_MAP) {
+      ctx.registerToolPermission?.(tool, perm);
+    }
+    cleanups.push(() => {
+      for (const [tool] of TOOL_PERMISSION_MAP) {
+        ctx?.unregisterToolPermission?.(tool);
+      }
+    });
+
     // Register context provider
     ctx.registerContextProvider(memoryContextProvider);
     cleanups.push(() => ctx?.unregisterContextProvider("memory-semantic"));
@@ -295,6 +327,7 @@ const plugin: WOPRPlugin & {
 
     // Unregister A2A tools
     unregisterMemoryTools(ctx);
+    unregisterIdentityTools(ctx);
 
     // Close memory manager
     if (state.memoryManager) {

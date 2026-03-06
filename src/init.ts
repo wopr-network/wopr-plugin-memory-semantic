@@ -6,6 +6,7 @@ import { createSessionDestroyHandler } from "./core-memory/session-hook.js";
 import { startWatcher } from "./core-memory/watcher.js";
 import type { EmbeddingQueue, PendingEntry } from "./embedding-queue.js";
 import { createEmbeddingProvider } from "./embeddings.js";
+import { registerIdentityTools } from "./identity-tools.js";
 import { createMemoryPluginSchema } from "./memory-schema.js";
 import { getHnswPath, loadChunkMetadata, persistNewEntryToDb } from "./persistence.js";
 import { createSemanticSearchManager, type SemanticSearchManager } from "./search.js";
@@ -153,6 +154,9 @@ export async function initialize(
 
     // 8. Register A2A memory tools
     registerMemoryTools(api, state.memoryManager, state.instanceId);
+
+    // 8b. Register identity tools (moved from core in WOP-1773)
+    registerIdentityTools(api);
 
     // Create embedding provider
     state.embeddingProvider = await createEmbeddingProvider(state.config);
