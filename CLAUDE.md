@@ -57,3 +57,13 @@ The `Stop` hook writes to this file automatically at session end. Only non-main 
 
 - **index.ts (cleanup closures)**: Capture `ctx` into a local `const cleanupCtx = ctx` before passing it to cleanup/shutdown closures — closures over mutable module-level `ctx` will see a stale or reassigned value.
 - **a2a-tools.ts (filesystem discovery)**: Narrow `catch` blocks to `ENOENT` only (`(err as NodeJS.ErrnoException).code !== 'ENOENT'` → rethrow) — bare catches silently swallow permission errors and corrupt-state failures.
+## Version Control: Prefer jj
+
+Use `jj` (Jujutsu) for all VCS operations instead of `git`:
+- `jj status`, `jj diff`, `jj log` for inspection
+- `jj new` to start a change, `jj describe` to set the message
+- `jj commit` to commit, `jj push` to push
+- `jj squash`, `jj rebase`, `jj edit` for history manipulation
+
+Fall back to `git` only for operations not yet supported by `jj`.
+
