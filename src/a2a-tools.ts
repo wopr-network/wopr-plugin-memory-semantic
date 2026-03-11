@@ -95,7 +95,11 @@ function assertWithinBase(baseDir: string, filePath: string): void {
   }
 }
 
-// Helper to resolve memory files
+/**
+ * Resolve a memory filename to an absolute path.
+ * Checks global identity memory first, then falls back to session-specific memory.
+ * Throws PathTraversalError if filename is absolute or escapes its base directory.
+ */
 function resolveMemoryFile(
   sessionDir: string,
   filename: string,
@@ -115,6 +119,11 @@ function resolveMemoryFile(
   return { path: sessionPath, exists: false, isGlobal: false };
 }
 
+/**
+ * Resolve a root-level identity filename (e.g. SOUL.md, IDENTITY.md) to an absolute path.
+ * Checks global identity directory first, then falls back to the session root.
+ * Throws PathTraversalError if filename is absolute or escapes its base directory.
+ */
 function resolveRootFile(
   sessionDir: string,
   filename: string,
@@ -134,6 +143,10 @@ function resolveRootFile(
   return { path: sessionPath, exists: false, isGlobal: false };
 }
 
+/**
+ * Return a deduplicated list of all .md filenames available in the global memory
+ * directory and the session-specific memory directory. Session files shadow global ones.
+ */
 function listAllMemoryFiles(sessionDir: string, globalMemoryDir: string): string[] {
   const files = new Set<string>();
   if (existsSync(globalMemoryDir)) {
@@ -171,8 +184,8 @@ export async function discoverSessionMemoryDirs(): Promise<string[]> {
       }
     }
   } catch (err) {
-    /* sessions dir does not exist — rethrow anything else */
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    /* sessions dir does not exist — return empty */
   }
   return dirs;
 }
